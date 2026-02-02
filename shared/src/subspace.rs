@@ -50,7 +50,7 @@ pub struct BlockExt {
 }
 
 impl BlockExt {
-    async fn read_storage<Args: StorageKey, T: Decode>(
+    pub async fn read_storage<Args: StorageKey, T: Decode>(
         &self,
         pallet: &str,
         storage: &str,
@@ -165,6 +165,30 @@ impl Subspace {
 
     pub fn runtime_metadata_updater(&self) -> ClientRuntimeUpdater<SubstrateConfig> {
         self.client.updater()
+    }
+
+    pub async fn block_ext(&self, block_hash: BlockHash) -> Result<BlockExt, Error> {
+        let header = self
+            .rpc
+            .chain_get_header(Some(block_hash))
+            .await?
+            .ok_or(Error::MissingBlockHashFromCache(block_hash))?;
+        let SubstrateHeader {
+            parent_hash,
+            number,
+            state_root,
+            extrinsics_root,
+            ..
+        } = header;
+
+        Ok(BlockExt {
+            number,
+            hash: block_hash,
+            parent_hash,
+            state_root,
+            extrinsics_root,
+            client: self.client.clone(),
+        })
     }
 
     pub fn blocks_stream(&self) -> BlocksStream {

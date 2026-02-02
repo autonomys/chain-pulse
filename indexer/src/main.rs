@@ -1,7 +1,11 @@
+#![feature(iterator_try_collect)]
+
 mod error;
+mod types;
 mod xdm;
 
 use crate::error::Error;
+use crate::types::{ChainId, DomainId};
 use clap::Parser;
 use serde::Deserialize;
 use shared::subspace::Subspace;
@@ -31,11 +35,6 @@ struct Config {
     rpc: BTreeMap<String, Rpc>,
 }
 
-enum Chain {
-    Consensus,
-    AutoEvm,
-}
-
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
@@ -57,10 +56,10 @@ async fn main() -> Result<(), Error> {
     let mut join_set: JoinSet<Result<(), Error>> = JoinSet::default();
 
     // start consensus tasks
-    start_tasks(Chain::Consensus, &mut join_set, consensus_rpc).await?;
+    start_tasks(ChainId::Consensus, &mut join_set, consensus_rpc).await?;
 
     // start auto evm tasks
-    start_tasks(Chain::AutoEvm, &mut join_set, auto_evm_rpc).await?;
+    start_tasks(ChainId::Domain(DomainId(0)), &mut join_set, auto_evm_rpc).await?;
 
     // no task in the join set should exit
     // if exits, it is a failure
@@ -72,13 +71,14 @@ async fn main() -> Result<(), Error> {
 }
 
 async fn start_tasks(
-    span: Chain,
+    chain: ChainId,
     join_set: &mut JoinSet<Result<(), Error>>,
     rpc: &str,
 ) -> Result<(), Error> {
-    let span = match span {
-        Chain::Consensus => info_span!("consensus"),
-        Chain::AutoEvm => info_span!("auto-evm"),
+    let span = match chain {
+        ChainId::Consensus => info_span!("consensus"),
+        ChainId::Domain(DomainId(0)) => info_span!("auto-evm"),
+        _ => return Err(Error::Config(format!("Unknown Chain: {chain:?}"))),
     };
     let subspace = Subspace::new_from_url(rpc).await?;
     let updater = subspace.runtime_metadata_updater();
@@ -90,7 +90,7 @@ async fn start_tasks(
     join_set.spawn(
         {
             let stream = subspace.blocks_stream();
-            async move { xdm::index_xdm(stream).await }
+            async move { xdm::index_xdm(chain, stream).await }
         }
         .instrument(span.clone()),
     );

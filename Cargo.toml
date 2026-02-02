@@ -21,15 +21,18 @@ humantime = "2.3.0"
 libp2p = { version = "0.56.0", default-features = false }
 libp2p-connection-limits = "0.6.0"
 log = "0.4.28"
+hex-literal = "1.1.0"
 parity-scale-codec = "3.7.5"
 reqwest = { version = "0.12.24", default-features = false }
 rust_decimal = "1.39.0"
+scale-encode = "0.10.1"
 scale-decode = "0.16.0"
 scale-decode-derive = "0.16.0"
 serde = "1.0.228"
 shared = { path = "shared" }
 slack-morphism = "2.16.0"
 sp-blockchain = "42.0.0"
+sp-core = "39.0.0"
 sp-runtime = "44.0.0"
 substrate-p2p = { git = "https://github.com/vedhavyas/substrate-p2p", rev = "85ae0388b1f080d2c282e2d9f7a5322656753845" }
 subxt = { version = "0.44.0", default-features = false }
