@@ -5,8 +5,6 @@ use tokio::task::JoinError;
 /// Overarching Error type for Alerter.
 #[derive(thiserror::Error, Debug)]
 pub(crate) enum Error {
-    #[error("Subxt error: {0}")]
-    Subxt(#[from] subxt::Error),
     #[error("Join error: {0}")]
     Join(#[from] JoinError),
     #[error("Reqwest error: {0}")]
@@ -29,4 +27,10 @@ pub(crate) enum Error {
     App(String),
     #[error("Subspace error: {0}")]
     Subspace(#[from] shared::error::Error),
+}
+
+impl From<subxt::Error> for Error {
+    fn from(e: subxt::Error) -> Self {
+        Self::Subspace(shared::error::Error::from(e))
+    }
 }

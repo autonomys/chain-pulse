@@ -8,6 +8,7 @@ repository = "https://github.com/autonomys/subspace-chain-alerts"
 resolver = "2"
 members = [
     "alerter",
+    "indexer",
     "shared",
 ]
 
@@ -34,6 +35,8 @@ substrate-p2p = { git = "https://github.com/vedhavyas/substrate-p2p", rev = "85a
 subxt = { version = "0.44.0", default-features = false }
 subxt-core = "0.44.0"
 subxt-rpcs = "0.44.0"
+tracing = "0.1.44"
+tracing-subscriber = "0.3.22"
 thiserror = "2.0.17"
 tokio = "1.48.0"
 toml = "0.9.8"
