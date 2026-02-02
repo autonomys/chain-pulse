@@ -8,8 +8,8 @@ use crate::event_types::{
     TransferDirection, TransferEvent, TransferKnownAccountEvent,
 };
 use crate::slack::{Alert, AlertSink};
-use crate::subspace::{AccountId, BlocksStream};
 use log::{debug, error, info};
+use shared::subspace::{AccountId, BlocksStream};
 use std::collections::BTreeMap;
 use std::str::FromStr;
 use subxt::events::Events;

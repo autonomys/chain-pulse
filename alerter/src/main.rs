@@ -12,7 +12,6 @@ mod p2p_network;
 mod slack;
 mod slots;
 mod stall_and_reorg;
-mod subspace;
 mod uptime;
 
 use crate::cli::Config;
@@ -20,13 +19,13 @@ use crate::error::Error;
 use crate::md_format::FormatConfig;
 use crate::p2p_network::Network;
 use crate::slack::SlackAlerter;
-use crate::subspace::Subspace;
 use crate::uptime::push_uptime_status;
 use clap::Parser;
 use env_logger::{Builder, Env, Target};
 use libp2p::Multiaddr;
 use log::info;
 use serde::Deserialize;
+use shared::subspace::Subspace;
 use sp_runtime::app_crypto::sp_core::crypto::set_default_ss58_version;
 use std::collections::BTreeMap;
 use std::fs;
@@ -142,7 +141,7 @@ async fn main() -> Result<(), Error> {
         async move { slack.run(format_config).await }
     });
 
-    join_set.spawn(async move { subspace.listen_for_all_blocks().await });
+    join_set.spawn(async move { subspace.listen_for_all_blocks().await.map_err(Into::into) });
 
     join_set.spawn(async move { network.run().await });
 

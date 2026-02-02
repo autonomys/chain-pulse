@@ -3,9 +3,9 @@
 use crate::cli::StallAndReorgConfig;
 use crate::error::Error;
 use crate::slack::{Alert, AlertSink};
-use crate::subspace::{Block, BlocksStream, ReorgData};
 use humantime::format_duration;
 use log::{debug, error, info};
+use shared::subspace::{Block, BlocksStream, ReorgData};
 use sp_blockchain::HashAndNumber;
 use std::time::Duration;
 use tokio::time;

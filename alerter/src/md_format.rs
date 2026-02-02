@@ -4,9 +4,9 @@ use crate::event_types::{Event, TransferKnownAccountEvent};
 use crate::slack::Alert;
 use crate::slots::{AvgSlowSlot, SlowSlot, TimekeeperRecovery, TimekeeperStall};
 use crate::stall_and_reorg::{ChainRecovery, ChainReorg, ChainStall};
-use crate::subspace::{Balance, Block};
 use humantime::format_duration;
 use rust_decimal::Decimal;
+use shared::subspace::{Balance, Block};
 use sp_blockchain::HashAndNumber;
 
 /// Config for Slack formatter

@@ -8,6 +8,7 @@ repository = "https://github.com/autonomys/subspace-chain-alerts"
 resolver = "2"
 members = [
     "alerter",
+    "shared",
 ]
 
 [workspace.dependencies]
@@ -25,6 +26,7 @@ rust_decimal = "1.39.0"
 scale-decode = "0.16.0"
 scale-decode-derive = "0.16.0"
 serde = "1.0.228"
+shared = { path = "shared" }
 slack-morphism = "2.16.0"
 sp-blockchain = "42.0.0"
 sp-runtime = "44.0.0"
@@ -47,3 +49,9 @@ overflow-checks = true
 [profile.production]
 inherits = "release"
 lto = "fat"
+
+[workspace.lints.rust]
+unused_crate_dependencies = "forbid"
+warnings = "deny"
+rust_2018_idioms = { level = "deny", priority = -1 }
+unsafe_code = "forbid"
