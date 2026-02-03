@@ -1,11 +1,10 @@
+use sqlx::migrate::MigrateError;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::task::JoinError;
 
 /// Overarching Error type for Alerter.
 #[derive(thiserror::Error, Debug)]
 pub(crate) enum Error {
-    #[error("Toml error: {0}")]
-    Toml(#[from] toml::de::Error),
     #[error("Config error: {0}")]
     Config(String),
     #[error("Subspace error: {0}")]
@@ -16,6 +15,10 @@ pub(crate) enum Error {
     Join(#[from] JoinError),
     #[error("Broadcast Receive error: {0}")]
     BroadRecvErr(#[from] RecvError),
+    #[error("DB error: {0}")]
+    DB(#[from] sqlx::Error),
+    #[error("Migrate error: {0}")]
+    Migrate(#[from] MigrateError),
 }
 
 impl From<subxt::Error> for Error {

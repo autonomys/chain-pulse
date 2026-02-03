@@ -12,17 +12,17 @@ futures-util.workspace = true
 parity-scale-codec = { workspace = true, features = ["derive"] }
 scale-encode.workspace = true
 scale-decode.workspace = true
-serde = { workspace = true, features = ["derive"] }
 shared.workspace = true
 subxt = { workspace = true, features = ["native", "jsonrpsee", "reconnecting-rpc-client"] }
+sqlx = { workspace = true, features = ["runtime-tokio", "tls-rustls", "postgres", "derive", "migrate", "time", "chrono"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["full"] }
-toml.workspace = true
 
 [dev-dependencies]
 hex-literal.workspace = true
+#pgtemp.workspace = true
 
 [lints]
 workspace = true

@@ -4,7 +4,7 @@ use crate::types::{EventSegmentSize, system_event_segment_key};
 use futures_util::stream::Fuse;
 use futures_util::{StreamExt, TryStreamExt, stream};
 use log::{debug, error, info, warn};
-use sp_blockchain::{CachedHeaderMetadata, HashAndNumber, TreeRoute};
+use sp_blockchain::{CachedHeaderMetadata, TreeRoute};
 use sp_runtime::app_crypto::sp_core::crypto::Ss58AddressFormat;
 use sp_runtime::codec::{Decode, Encode};
 use sp_runtime::traits::{BlakeTwo256, Block as BlockT, Header as HeaderT};
@@ -29,6 +29,7 @@ pub type BlockHash = <Block as BlockT>::Hash;
 pub type BlockNumber = <<Block as BlockT>::Header as HeaderT>::Number;
 pub type AccountId = <SubstrateConfig as Config>::AccountId;
 pub type Balance = u128;
+pub type HashAndNumber = sp_blockchain::HashAndNumber<Block>;
 type SubspaceClient = OnlineClient<SubstrateConfig>;
 type SubspaceRpcClient = LegacyRpcMethods<SubstrateConfig>;
 type BlocksSink = Sender<BlocksExt>;
@@ -138,9 +139,9 @@ impl BlockExt {
 
 #[derive(Debug, Clone)]
 pub struct ReorgData {
-    pub enacted: Vec<HashAndNumber<Block>>,
-    pub retracted: Vec<HashAndNumber<Block>>,
-    pub common_block: HashAndNumber<Block>,
+    pub enacted: Vec<HashAndNumber>,
+    pub retracted: Vec<HashAndNumber>,
+    pub common_block: HashAndNumber,
 }
 
 /// Best blocks that have been enacted and potential re-org depth if there was a re-org.
@@ -286,7 +287,7 @@ impl Subspace {
     async fn listen_for_blocks(
         &self,
         header_metadata: &mut HeadersMetadataCache,
-        current_best_block: &mut HashAndNumber<Block>,
+        current_best_block: &mut HashAndNumber,
         mut sub: SubxtBlockStream,
     ) -> Result<(), Error> {
         loop {
@@ -404,7 +405,7 @@ impl Subspace {
         &self,
         sub: &mut SubxtBlockStream,
         header_metadata: &mut HeadersMetadataCache,
-    ) -> Result<HashAndNumber<Block>, Error> {
+    ) -> Result<HashAndNumber, Error> {
         let mut latest_block_hash = None;
         while latest_block_hash.is_none() {
             let block = sub.next().await.ok_or(Error::MissingBlock)??;

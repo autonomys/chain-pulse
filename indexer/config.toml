@@ -1,7 +1,0 @@
-[rpc.mainnet]
-consensus_rpc = "wss://rpc.mainnet.autonomys.xyz/ws"
-auto_evm_rpc = "wss://auto-evm.mainnet.autonomys.xyz/ws"
-
-[rpc.chronos]
-consensus_rpc = "wss://rpc.chronos.autonomys.xyz/ws"
-auto_evm_rpc = "wss://auto-evm.chronos.autonomys.xyz/ws"

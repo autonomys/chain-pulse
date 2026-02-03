@@ -24,6 +24,7 @@ log = "0.4.28"
 hex-literal = "1.1.0"
 parity-scale-codec = "3.7.5"
 reqwest = { version = "0.12.24", default-features = false }
+pgtemp = "0.7.1"
 rust_decimal = "1.39.0"
 scale-encode = "0.10.1"
 scale-decode = "0.16.0"
@@ -35,6 +36,7 @@ sp-blockchain = "42.0.0"
 sp-core = "39.0.0"
 sp-crypto-hashing = "0.1.0"
 sp-runtime = "44.0.0"
+sqlx = { version = "0.8.6", default-features = false }
 substrate-p2p = { git = "https://github.com/vedhavyas/substrate-p2p", rev = "85ae0388b1f080d2c282e2d9f7a5322656753845" }
 subxt = { version = "0.44.0", default-features = false }
 subxt-core = "0.44.0"

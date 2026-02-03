@@ -1,38 +1,33 @@
 #![feature(iterator_try_collect)]
 
 mod error;
+mod storage;
 mod types;
 mod xdm;
 
 use crate::error::Error;
+use crate::storage::Db;
 use crate::types::{ChainId, DomainId};
 use clap::Parser;
-use serde::Deserialize;
 use shared::subspace::Subspace;
-use std::collections::BTreeMap;
-use std::fs;
 use tokio::task::JoinSet;
-use tracing::{Instrument, info, info_span};
+use tracing::{Instrument, info_span};
 use tracing_subscriber::EnvFilter;
 
 /// Cli config for indexer.
 #[derive(Debug, Parser)]
 pub(crate) struct Cli {
-    #[arg(long, default_value = "./indexer/config.toml")]
-    config_path: String,
-    #[arg(long, required = true)]
-    network_name: String,
-}
-
-#[derive(Deserialize, Debug)]
-struct Rpc {
+    #[arg(long, default_value = "./indexer/migrations")]
+    migrations_path: String,
+    #[arg(long, default_value = "wss://rpc.mainnet.autonomys.xyz/ws")]
     consensus_rpc: String,
+    #[arg(long, default_value = "wss://auto-evm.mainnet.autonomys.xyz/ws")]
     auto_evm_rpc: String,
-}
-
-#[derive(Deserialize, Debug)]
-struct Config {
-    rpc: BTreeMap<String, Rpc>,
+    #[arg(
+        long,
+        default_value = "postgres://indexer:password@localhost:5434/indexer?sslmode=disable"
+    )]
+    db_uri: String,
 }
 
 #[tokio::main]
@@ -40,26 +35,21 @@ async fn main() -> Result<(), Error> {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     tracing_subscriber::fmt().with_env_filter(filter).init();
     let Cli {
-        config_path,
-        network_name,
-    } = Cli::parse();
-
-    info!("Loading network configuration from `{config_path}`",);
-    let config_data = fs::read_to_string(&config_path)?;
-    let config = toml::from_str::<Config>(config_data.as_str())?;
-    let Rpc {
+        migrations_path,
         consensus_rpc,
         auto_evm_rpc,
-    } = config.rpc.get(&network_name).ok_or(Error::Config(format!(
-        "network `{network_name}` not found!"
-    )))?;
+        db_uri,
+    } = Cli::parse();
+
+    let _db = Db::new(&db_uri, &migrations_path).await?;
+
     let mut join_set: JoinSet<Result<(), Error>> = JoinSet::default();
 
     // start consensus tasks
-    start_tasks(ChainId::Consensus, &mut join_set, consensus_rpc).await?;
+    start_tasks(ChainId::Consensus, &mut join_set, &consensus_rpc).await?;
 
     // start auto evm tasks
-    start_tasks(ChainId::Domain(DomainId(0)), &mut join_set, auto_evm_rpc).await?;
+    start_tasks(ChainId::Domain(DomainId(0)), &mut join_set, &auto_evm_rpc).await?;
 
     // no task in the join set should exit
     // if exits, it is a failure
