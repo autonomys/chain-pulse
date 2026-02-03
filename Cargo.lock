@@ -5529,6 +5529,7 @@ dependencies = [
  "futures-util",
  "log",
  "sp-blockchain",
+ "sp-crypto-hashing",
  "sp-runtime",
  "subxt",
  "subxt-core",

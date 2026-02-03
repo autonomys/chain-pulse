@@ -2,3 +2,4 @@
 
 pub mod error;
 pub mod subspace;
+mod types;

@@ -13,6 +13,7 @@ workspace = true
 futures-util.workspace = true
 log.workspace = true
 sp-blockchain.workspace = true
+sp-crypto-hashing.workspace = true
 sp-runtime.workspace = true
 subxt = { workspace = true, features = ["native", "jsonrpsee", "reconnecting-rpc-client"] }
 subxt-core.workspace = true

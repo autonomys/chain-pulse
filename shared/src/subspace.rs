@@ -1,5 +1,6 @@
 //! Module that follows the chain and broadcast blocks data.
 use crate::error::Error;
+use crate::types::{EventSegmentSize, system_event_segment_key};
 use futures_util::stream::Fuse;
 use futures_util::{StreamExt, TryStreamExt, stream};
 use log::{debug, error, info, warn};
@@ -10,9 +11,10 @@ use sp_runtime::traits::{BlakeTwo256, Block as BlockT, Header as HeaderT};
 use sp_runtime::{OpaqueExtrinsic, generic};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
+use subxt::backend::BackendExt;
 use subxt::client::ClientRuntimeUpdater;
 use subxt::config::substrate::SubstrateHeader;
-use subxt::events::Events;
+use subxt::events::{EventDetails, Events};
 use subxt::{OnlineClient, SubstrateConfig};
 use subxt_core::Config;
 use subxt_core::storage::address::StorageKey;
@@ -106,6 +108,31 @@ impl BlockExt {
     pub async fn events(&self) -> Result<Events<SubstrateConfig>, Error> {
         let events = self.client.events().at(self.hash).await?;
         Ok(events)
+    }
+
+    pub async fn events_from_segments(&self) -> Result<Vec<EventDetails<SubstrateConfig>>, Error> {
+        let segment_size = self.client.constants().at(&EventSegmentSize)?;
+        let event_count = self
+            .read_storage::<_, u32>("System", "EventCount", ())
+            .await?;
+        let max_segment = event_count / segment_size;
+        let mut total_events = vec![];
+        let backend = self.client.backend();
+        for segment in 0..=max_segment {
+            let key = system_event_segment_key(segment);
+            let data = backend.storage_fetch_value(key.clone(), self.hash).await?;
+            if let Some(event_data) = data {
+                let events =
+                    Events::<SubstrateConfig>::decode_from(event_data, self.client.metadata())
+                        .iter()
+                        .filter_map(|event| event.ok())
+                        .collect::<Vec<_>>();
+                total_events.extend(events);
+            }
+        }
+
+        total_events.truncate(event_count as usize);
+        Ok(total_events)
     }
 }
 

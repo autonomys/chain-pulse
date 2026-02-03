@@ -1,12 +1,13 @@
 use crate::error::Error;
 use crate::types::{
-    ChainId, Event, IncomingTransferSuccessful, OutgoingTransferFailed, OutgoingTransferInitiated,
-    OutgoingTransferInitiatedWithTransfer, OutgoingTransferSuccessful, Transfer,
+    ChainId, DomainId, Event, IncomingTransferSuccessful, OutgoingTransferFailed,
+    OutgoingTransferInitiated, OutgoingTransferInitiatedWithTransfer, OutgoingTransferSuccessful,
+    Transfer,
 };
 use futures_util::{StreamExt, TryStreamExt, stream};
 use shared::subspace::{BlockExt, BlocksStream};
 use subxt::SubstrateConfig;
-use subxt::events::{Events, StaticEvent};
+use subxt::events::{EventDetails, StaticEvent};
 use subxt::storage::StaticStorageKey;
 use tracing::info;
 
@@ -21,17 +22,27 @@ pub(crate) async fn index_xdm(chain: ChainId, mut stream: BlocksStream) -> Resul
 }
 
 async fn extract_xdm_events_for_block(
-    _chain: &ChainId,
+    chain: &ChainId,
     block_ext: &BlockExt,
 ) -> Result<Vec<Event>, Error> {
-    let block_events = block_ext.events().await?;
+    let block_events = match chain {
+        ChainId::Consensus => block_ext
+            .events()
+            .await?
+            .iter()
+            .filter_map(|event| event.ok())
+            .collect::<Vec<_>>(),
+        ChainId::Domain(DomainId(0)) => block_ext.events_from_segments().await?,
+        _ => return Err(Error::Config(format!("invalid chain id: {chain:?}"))),
+    };
     let mut events: Vec<Event> = vec![];
     events.extend(as_events::<OutgoingTransferFailed>(&block_events)?);
     events.extend(as_events::<OutgoingTransferSuccessful>(&block_events)?);
     events.extend(as_events::<IncomingTransferSuccessful>(&block_events)?);
     let transfer_initiated_events = block_events
-        .find::<OutgoingTransferInitiated>()
-        .try_collect::<Vec<_>>()?;
+        .iter()
+        .filter_map(|e| e.as_event::<OutgoingTransferInitiated>().ok().flatten())
+        .collect::<Vec<_>>();
 
     let outgoing_init_events = stream::iter(transfer_initiated_events.into_iter().map(
         |event| async move {
@@ -62,14 +73,12 @@ async fn extract_xdm_events_for_block(
 }
 
 fn as_events<E: StaticEvent + Into<Event>>(
-    block_events: &Events<SubstrateConfig>,
+    block_events: &[EventDetails<SubstrateConfig>],
 ) -> Result<Vec<Event>, Error> {
     Ok(block_events
-        .find::<E>()
-        .try_collect::<Vec<_>>()?
-        .into_iter()
-        .map(Into::into)
-        .collect())
+        .iter()
+        .filter_map(|event| event.as_event::<E>().ok().flatten().map(Into::into))
+        .collect::<Vec<_>>())
 }
 
 #[cfg(test)]
@@ -196,6 +205,66 @@ mod tests {
                 chain_id: ChainId::Domain(DomainId(0)),
                 message_id: (U256::zero().into(), U256::zero().into()),
                 amount: 1000000000000000000,
+            })
+        )
+    }
+
+    #[tokio::test]
+    async fn test_evm_domain_outgoing_transfer_initiated() {
+        let subspace = Subspace::new_from_url("wss://auto-evm.mainnet.autonomys.xyz/ws")
+            .await
+            .unwrap();
+
+        let block_hash =
+            H256::from_str("0xa3224142b5bf1ae57ed7f757f830806a0a153af701adfe52a5a740f3ede3aeea")
+                .unwrap();
+        let block_ext = subspace.block_ext(block_hash).await.unwrap();
+        let mut events = extract_xdm_events_for_block(&ChainId::Domain(DomainId(0)), &block_ext)
+            .await
+            .unwrap();
+        assert_eq!(events.len(), 1);
+        let event = events.pop().unwrap();
+        assert_eq!(
+            event,
+            Event::OutgoingTransferInitiated(OutgoingTransferInitiatedWithTransfer {
+                message_id: (U256::zero().into(), U256::from(102).into()),
+                transfer: Transfer {
+                    amount: 66400000000000000000000,
+                    sender: Location {
+                        chain_id: ChainId::Domain(DomainId(0)),
+                        account_id: MultiAccountId::AccountId20(
+                            hex!("ba36130e55c8c794c6829f4b2843f78b52f34dfe").into()
+                        )
+                    },
+                    receiver: Location {
+                        chain_id: ChainId::Consensus,
+                        account_id: MultiAccountId::AccountId32([0; 32].into())
+                    },
+                },
+            })
+        )
+    }
+
+    #[tokio::test]
+    async fn test_evm_domain_outgoing_transfer_successful() {
+        let subspace = Subspace::new_from_url("wss://auto-evm.mainnet.autonomys.xyz/ws")
+            .await
+            .unwrap();
+
+        let block_hash =
+            H256::from_str("0x823a47e998c0d699e52f50592136bc7f9f3807935a97bfd93196cce6242812ea")
+                .unwrap();
+        let block_ext = subspace.block_ext(block_hash).await.unwrap();
+        let mut events = extract_xdm_events_for_block(&ChainId::Domain(DomainId(0)), &block_ext)
+            .await
+            .unwrap();
+        assert_eq!(events.len(), 1);
+        let event = events.pop().unwrap();
+        assert_eq!(
+            event,
+            Event::OutgoingTransferSuccessful(OutgoingTransferSuccessful {
+                chain_id: ChainId::Consensus,
+                message_id: (U256::zero().into(), U256::from(102).into()),
             })
         )
     }
