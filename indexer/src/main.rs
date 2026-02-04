@@ -1,4 +1,5 @@
 #![feature(iterator_try_collect)]
+#![deny(unused_crate_dependencies)]
 
 mod error;
 mod storage;
