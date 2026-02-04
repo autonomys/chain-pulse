@@ -3,8 +3,7 @@ CREATE SCHEMA IF NOT EXISTS indexer;
 CREATE TABLE IF NOT EXISTS indexer.metadata
 (
     process                TEXT PRIMARY KEY NOT NULL,
-    processed_block_number BIGINT           NOT NULL,
-    processed_block_hash   TEXT             NOT NULL
+    processed_block_number BIGINT           NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS indexer.xdm_transfers

@@ -18,17 +18,20 @@ use tracing_subscriber::EnvFilter;
 /// Cli config for indexer.
 #[derive(Debug, Parser)]
 pub(crate) struct Cli {
-    #[arg(long, default_value = "./indexer/migrations")]
+    #[clap(long, env, default_value = "./indexer/migrations")]
     migrations_path: String,
-    #[arg(long, default_value = "wss://rpc.mainnet.autonomys.xyz/ws")]
+    #[clap(long, env, default_value = "wss://rpc.mainnet.autonomys.xyz/ws")]
     consensus_rpc: String,
-    #[arg(long, default_value = "wss://auto-evm.mainnet.autonomys.xyz/ws")]
+    #[clap(long, env, default_value = "wss://auto-evm.mainnet.autonomys.xyz/ws")]
     auto_evm_rpc: String,
-    #[arg(
+    #[clap(
         long,
+        env,
         default_value = "postgres://indexer:password@localhost:5434/indexer?sslmode=disable"
     )]
     db_uri: String,
+    #[clap(long, env, default_value = "5000")]
+    process_blocks_in_parallel: u32,
 }
 
 #[tokio::main]
@@ -40,17 +43,32 @@ async fn main() -> Result<(), Error> {
         consensus_rpc,
         auto_evm_rpc,
         db_uri,
+        process_blocks_in_parallel,
     } = Cli::parse();
 
-    let _db = Db::new(&db_uri, &migrations_path).await?;
+    let db = Db::new(&db_uri, &migrations_path).await?;
 
     let mut join_set: JoinSet<Result<(), Error>> = JoinSet::default();
 
     // start consensus tasks
-    start_tasks(ChainId::Consensus, &mut join_set, &consensus_rpc).await?;
+    start_tasks(
+        ChainId::Consensus,
+        &mut join_set,
+        &consensus_rpc,
+        &db,
+        process_blocks_in_parallel,
+    )
+    .await?;
 
     // start auto evm tasks
-    start_tasks(ChainId::Domain(DomainId(0)), &mut join_set, &auto_evm_rpc).await?;
+    start_tasks(
+        ChainId::Domain(DomainId(0)),
+        &mut join_set,
+        &auto_evm_rpc,
+        &db,
+        process_blocks_in_parallel,
+    )
+    .await?;
 
     // no task in the join set should exit
     // if exits, it is a failure
@@ -65,6 +83,8 @@ async fn start_tasks(
     chain: ChainId,
     join_set: &mut JoinSet<Result<(), Error>>,
     rpc: &str,
+    db: &Db,
+    process_blocks_in_parallel: u32,
 ) -> Result<(), Error> {
     let span = match chain {
         ChainId::Consensus => info_span!("consensus"),
@@ -83,7 +103,18 @@ async fn start_tasks(
     join_set.spawn(
         {
             let stream = subspace.blocks_stream();
-            async move { xdm::index_xdm(chain, stream).await }
+            let block_provider = subspace.block_provider();
+            let db = db.clone();
+            async move {
+                xdm::index_xdm(
+                    chain,
+                    stream,
+                    block_provider,
+                    db,
+                    process_blocks_in_parallel,
+                )
+                .await
+            }
         }
         .instrument(span.clone()),
     );

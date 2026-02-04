@@ -1,3 +1,4 @@
+use crate::subspace::BlockNumber;
 use subxt::utils::H256;
 
 /// Overarching Error type for Alerter.
@@ -13,6 +14,10 @@ pub enum Error {
     MissingBlockHashFromCache(H256),
     #[error("Block body missing: {0}")]
     MissingBlockBody(H256),
+    #[error("Block header missing for number: {0}")]
+    MissingBlockHeaderForNumber(BlockNumber),
+    #[error("Block header missing for hash: {0}")]
+    MissingBlockHeaderForHash(H256),
     #[error("Storage error: {0}")]
     Storage(String),
     #[error("Scale error: {0}")]

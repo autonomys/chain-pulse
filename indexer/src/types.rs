@@ -1,6 +1,3 @@
-// TODO:
-#![allow(dead_code)]
-
 use parity_scale_codec::Decode;
 use scale_decode::DecodeAsType;
 use scale_decode::ext::primitive_types::U256;

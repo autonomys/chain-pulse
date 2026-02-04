@@ -1,18 +1,14 @@
-// TODO:
-#![allow(dead_code)]
-
 use crate::error::Error;
 use crate::types::{
     ChainId, Event, IncomingTransferSuccessful, Location, OutgoingTransferInitiatedWithTransfer,
     Transfer, XdmMessageId,
 };
-use shared::subspace::HashAndNumber;
+use shared::subspace::{BlockNumber, HashAndNumber};
 use sqlx::PgPool;
 use std::path::Path;
-use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
-use subxt::utils::{H256, to_hex};
+use subxt::utils::to_hex;
 
 #[derive(Clone)]
 pub(crate) struct Db {
@@ -39,21 +35,18 @@ impl Db {
     pub(crate) async fn set_last_processed_block(
         &self,
         process: &str,
-        block: HashAndNumber,
+        block_number: BlockNumber,
     ) -> Result<(), Error> {
-        let HashAndNumber { hash, number } = block;
         let _ = sqlx::query(
             r#"
-        INSERT INTO indexer.metadata as m (process, processed_block_number, processed_block_hash)
-        VALUES ($1, $2, $3)
+        INSERT INTO indexer.metadata as m (process, processed_block_number)
+        VALUES ($1, $2)
         ON CONFLICT (process) DO UPDATE
-        SET processed_block_number = EXCLUDED.processed_block_number,
-            processed_block_hash = EXCLUDED.processed_block_hash
+        SET processed_block_number = EXCLUDED.processed_block_number
         "#,
         )
         .bind(process)
-        .bind(number as i64)
-        .bind(to_hex(hash))
+        .bind(block_number as i64)
         .execute(&*self.pool)
         .await?;
 
@@ -63,10 +56,10 @@ impl Db {
     pub(crate) async fn get_last_processed_block(
         &self,
         process: &str,
-    ) -> Result<HashAndNumber, Error> {
-        let (number, hash) = sqlx::query_as::<_, (i64, String)>(
+    ) -> Result<BlockNumber, Error> {
+        let number = sqlx::query_scalar::<_, i64>(
             r#"
-            SELECT processed_block_number, processed_block_hash
+            SELECT processed_block_number
             FROM indexer.metadata
             WHERE process = $1
             "#,
@@ -75,10 +68,7 @@ impl Db {
         .fetch_one(&*self.pool)
         .await?;
 
-        Ok(HashAndNumber {
-            hash: H256::from_str(&hash).expect("invalid hash"),
-            number: number as u32,
-        })
+        Ok(number as BlockNumber)
     }
 
     pub(crate) async fn store_events(
@@ -299,23 +289,17 @@ mod tests {
         let last_processed_block = db.db.get_last_processed_block(process).await;
         assert!(last_processed_block.is_err());
 
-        let block = HashAndNumber {
-            number: 100,
-            hash: H256::random(),
-        };
+        let block = 100;
         db.db
-            .set_last_processed_block(process, block.clone())
+            .set_last_processed_block(process, block)
             .await
             .unwrap();
         let last_processed_block = db.db.get_last_processed_block(process).await.unwrap();
         assert_eq!(last_processed_block, block);
 
-        let block = HashAndNumber {
-            number: 200,
-            hash: H256::random(),
-        };
+        let block = 200;
         db.db
-            .set_last_processed_block(process, block.clone())
+            .set_last_processed_block(process, block)
             .await
             .unwrap();
         let last_processed_block = db.db.get_last_processed_block(process).await.unwrap();
@@ -328,12 +312,13 @@ mod tests {
         let db = get_db().await;
         let subspace = Subspace::new_from_url("wss://rpc.mainnet.autonomys.xyz/ws")
             .await
-            .unwrap();
+            .unwrap()
+            .block_provider();
 
         let block_hash =
             H256::from_str("0x9e1d5eb5fddee84865824bb7b2c99c30573214f824a03a1a427843508bb6dad1")
                 .unwrap();
-        let block_ext = subspace.block_ext(block_hash).await.unwrap();
+        let block_ext = subspace.block_ext_at_hash(block_hash).await.unwrap();
         let events = extract_xdm_events_for_block(&ChainId::Consensus, &block_ext)
             .await
             .unwrap();
@@ -353,12 +338,13 @@ mod tests {
         let db = get_db().await;
         let subspace = Subspace::new_from_url("wss://rpc.mainnet.autonomys.xyz/ws")
             .await
-            .unwrap();
+            .unwrap()
+            .block_provider();
 
         let block_hash =
             H256::from_str("0x950efc4f83b80076ba175723e206515c494ac9a3715209f2c6cc0b1111aca9c7")
                 .unwrap();
-        let block_ext = subspace.block_ext(block_hash).await.unwrap();
+        let block_ext = subspace.block_ext_at_hash(block_hash).await.unwrap();
         let events = extract_xdm_events_for_block(&ChainId::Consensus, &block_ext)
             .await
             .unwrap();
@@ -378,12 +364,13 @@ mod tests {
         let db = get_db().await;
         let subspace = Subspace::new_from_url("wss://rpc.mainnet.autonomys.xyz/ws")
             .await
-            .unwrap();
+            .unwrap()
+            .block_provider();
 
         let block_hash =
             H256::from_str("0x09fc01ebf1791bd1e6f69d771e9672932cd450fd072cbf8fe4faeef100048343")
                 .unwrap();
-        let block_ext = subspace.block_ext(block_hash).await.unwrap();
+        let block_ext = subspace.block_ext_at_hash(block_hash).await.unwrap();
         let events = extract_xdm_events_for_block(&ChainId::Consensus, &block_ext)
             .await
             .unwrap();
@@ -403,12 +390,13 @@ mod tests {
         let db = get_db().await;
         let subspace = Subspace::new_from_url("wss://rpc.mainnet.autonomys.xyz/ws")
             .await
-            .unwrap();
+            .unwrap()
+            .block_provider();
 
         let block_hash =
             H256::from_str("0xcfcdfe0ab17288e67240d3d9d95074139b24d917c6f0352e2055e62001d4e92d")
                 .unwrap();
-        let block_ext = subspace.block_ext(block_hash).await.unwrap();
+        let block_ext = subspace.block_ext_at_hash(block_hash).await.unwrap();
         let events = extract_xdm_events_for_block(&ChainId::Consensus, &block_ext)
             .await
             .unwrap();
@@ -429,12 +417,13 @@ mod tests {
         let db = get_db().await;
         let subspace = Subspace::new_from_url("wss://auto-evm.mainnet.autonomys.xyz/ws")
             .await
-            .unwrap();
+            .unwrap()
+            .block_provider();
 
         let block_hash =
             H256::from_str("0xa3224142b5bf1ae57ed7f757f830806a0a153af701adfe52a5a740f3ede3aeea")
                 .unwrap();
-        let block_ext = subspace.block_ext(block_hash).await.unwrap();
+        let block_ext = subspace.block_ext_at_hash(block_hash).await.unwrap();
         let events = extract_xdm_events_for_block(&ChainId::Domain(DomainId(0)), &block_ext)
             .await
             .unwrap();
@@ -454,12 +443,13 @@ mod tests {
         let db = get_db().await;
         let subspace = Subspace::new_from_url("wss://auto-evm.mainnet.autonomys.xyz/ws")
             .await
-            .unwrap();
+            .unwrap()
+            .block_provider();
 
         let block_hash =
             H256::from_str("0x823a47e998c0d699e52f50592136bc7f9f3807935a97bfd93196cce6242812ea")
                 .unwrap();
-        let block_ext = subspace.block_ext(block_hash).await.unwrap();
+        let block_ext = subspace.block_ext_at_hash(block_hash).await.unwrap();
         let events = extract_xdm_events_for_block(&ChainId::Domain(DomainId(0)), &block_ext)
             .await
             .unwrap();

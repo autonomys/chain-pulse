@@ -41,6 +41,48 @@ type SubxtBlockStream =
 pub type Slot = u64;
 /// Subspace timestamp type.
 pub(crate) type Timestamp = u64;
+
+/// Block provider for subspace
+pub struct SubspaceBlockProvider {
+    rpc: Arc<SubspaceRpcClient>,
+    client: Arc<SubspaceClient>,
+}
+
+impl SubspaceBlockProvider {
+    pub async fn block_ext_at_number(&self, block_number: BlockNumber) -> Result<BlockExt, Error> {
+        let block_hash = self
+            .rpc
+            .chain_get_block_hash(Some(block_number.into()))
+            .await?
+            .ok_or(Error::MissingBlockHeaderForNumber(block_number))?;
+        self.block_ext_at_hash(block_hash).await
+    }
+
+    pub async fn block_ext_at_hash(&self, block_hash: BlockHash) -> Result<BlockExt, Error> {
+        let header = self
+            .rpc
+            .chain_get_header(Some(block_hash))
+            .await?
+            .ok_or(Error::MissingBlockHeaderForHash(block_hash))?;
+        let SubstrateHeader {
+            parent_hash,
+            number,
+            state_root,
+            extrinsics_root,
+            ..
+        } = header;
+
+        Ok(BlockExt {
+            number,
+            hash: block_hash,
+            parent_hash,
+            state_root,
+            extrinsics_root,
+            client: self.client.clone(),
+        })
+    }
+}
+
 /// Block with extracted details.
 #[derive(Debug, Clone)]
 pub struct BlockExt {
@@ -195,32 +237,15 @@ impl Subspace {
         self.client.updater()
     }
 
-    pub async fn block_ext(&self, block_hash: BlockHash) -> Result<BlockExt, Error> {
-        let header = self
-            .rpc
-            .chain_get_header(Some(block_hash))
-            .await?
-            .ok_or(Error::MissingBlockHashFromCache(block_hash))?;
-        let SubstrateHeader {
-            parent_hash,
-            number,
-            state_root,
-            extrinsics_root,
-            ..
-        } = header;
-
-        Ok(BlockExt {
-            number,
-            hash: block_hash,
-            parent_hash,
-            state_root,
-            extrinsics_root,
-            client: self.client.clone(),
-        })
-    }
-
     pub fn blocks_stream(&self) -> BlocksStream {
         self.stream.resubscribe()
+    }
+
+    pub fn block_provider(&self) -> SubspaceBlockProvider {
+        SubspaceBlockProvider {
+            rpc: self.rpc.clone(),
+            client: self.client.clone(),
+        }
     }
 
     pub async fn network_details(&self) -> Result<NetworkDetails, Error> {
