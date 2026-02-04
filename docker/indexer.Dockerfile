@@ -73,7 +73,6 @@ RUN \
     if [ $BUILDARCH != "amd64" ] && [ $TARGETARCH = "amd64" ]; then \
       export RUSTFLAGS="$RUSTFLAGS -C linker=x86_64-linux-gnu-gcc" \
     ; fi && \
-    sed -i 's/deny(unused_crate_dependencies)/allow(unused_crate_dependencies)/' indexer/src/main.rs && \
     RUSTC_TARGET_ARCH=$(echo $TARGETARCH | sed "s/amd64/x86_64/g" | sed "s/arm64/aarch64/g" | sed "s/riscv64/riscv64gc/g") && \
     /root/.cargo/bin/cargo -Zgitoxide -Zgit build \
         --locked \
