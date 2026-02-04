@@ -1,7 +1,9 @@
 # Exclude everything
 *
 # Then just include only the files required for builds
+!/indexer
 !/alerter
+!/shared
 !/Cargo.lock
 !/Cargo.toml
 !/rust-toolchain.toml
