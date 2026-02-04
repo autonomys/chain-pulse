@@ -6,8 +6,9 @@ use scale_decode::DecodeAsType;
 use scale_decode::ext::primitive_types::U256;
 use scale_encode::EncodeAsType;
 use shared::subspace::Balance;
+use std::fmt::{Debug, Display, Formatter};
 use subxt::events::StaticEvent;
-use subxt::utils::{AccountId32, H160};
+use subxt::utils::{AccountId32, H160, to_hex};
 
 #[derive(Debug, Copy, Clone, Decode, DecodeAsType, EncodeAsType, Eq, PartialEq)]
 pub(crate) struct U256Compat([u64; 4]);
@@ -24,14 +25,36 @@ impl From<U256Compat> for U256 {
     }
 }
 
+impl Display for U256Compat {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let value: U256 = (*self).into();
+        write!(f, "{value}")
+    }
+}
+
 /// Unique identifier of a domain.
 #[derive(Debug, Clone, DecodeAsType, Decode, EncodeAsType, Eq, PartialEq)]
 pub(crate) struct DomainId(pub(crate) u32);
+
+impl Display for DomainId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
 
 #[derive(Debug, Clone, DecodeAsType, Decode, EncodeAsType, Eq, PartialEq)]
 pub(crate) enum ChainId {
     Consensus,
     Domain(DomainId),
+}
+
+impl Display for ChainId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ChainId::Consensus => write!(f, "Consensus"),
+            ChainId::Domain(domain_id) => write!(f, "Domain({domain_id})"),
+        }
+    }
 }
 
 pub(crate) type XdmChannelId = U256Compat;
@@ -111,6 +134,21 @@ pub(crate) enum MultiAccountId {
     AccountId20(H160),
     /// Some raw bytes
     Raw(Vec<u8>),
+}
+
+impl Display for MultiAccountId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let str = match self {
+            MultiAccountId::AccountId32(data) => {
+                let acc = sp_core::crypto::AccountId32::new(data.0);
+                acc.to_string()
+            }
+            MultiAccountId::AccountId20(data) => to_hex(data.0),
+            MultiAccountId::Raw(data) => to_hex(data),
+        };
+
+        write!(f, "{str}")
+    }
 }
 
 #[derive(Debug, Clone, DecodeAsType, Decode, Eq, PartialEq)]

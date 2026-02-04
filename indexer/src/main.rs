@@ -10,6 +10,7 @@ use crate::storage::Db;
 use crate::types::{ChainId, DomainId};
 use clap::Parser;
 use shared::subspace::Subspace;
+use sp_core::crypto::set_default_ss58_version;
 use tokio::task::JoinSet;
 use tracing::{Instrument, info_span};
 use tracing_subscriber::EnvFilter;
@@ -71,6 +72,8 @@ async fn start_tasks(
         _ => return Err(Error::Config(format!("Unknown Chain: {chain:?}"))),
     };
     let subspace = Subspace::new_from_url(rpc).await?;
+    let network_details = subspace.network_details().await?;
+    set_default_ss58_version(network_details.ss58_format);
     let updater = subspace.runtime_metadata_updater();
     join_set.spawn(
         async move { updater.perform_runtime_updates().await.map_err(Into::into) }

@@ -13,6 +13,7 @@ parity-scale-codec = { workspace = true, features = ["derive"] }
 scale-encode.workspace = true
 scale-decode.workspace = true
 shared.workspace = true
+sp-core.workspace = true
 subxt = { workspace = true, features = ["native", "jsonrpsee", "reconnecting-rpc-client"] }
 sqlx = { workspace = true, features = ["runtime-tokio", "tls-rustls", "postgres", "derive", "migrate", "time", "chrono"] }
 tracing.workspace = true
@@ -22,7 +23,7 @@ tokio = { workspace = true, features = ["full"] }
 
 [dev-dependencies]
 hex-literal.workspace = true
-#pgtemp.workspace = true
+pgtemp.workspace = true
 
 [lints]
 workspace = true

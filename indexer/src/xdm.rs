@@ -21,7 +21,7 @@ pub(crate) async fn index_xdm(chain: ChainId, mut stream: BlocksStream) -> Resul
     }
 }
 
-async fn extract_xdm_events_for_block(
+pub(crate) async fn extract_xdm_events_for_block(
     chain: &ChainId,
     block_ext: &BlockExt,
 ) -> Result<Vec<Event>, Error> {
