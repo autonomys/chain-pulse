@@ -1,0 +1,22 @@
+[package]
+name = "shared"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+futures-util.workspace = true
+log.workspace = true
+sp-blockchain.workspace = true
+sp-crypto-hashing.workspace = true
+sp-runtime.workspace = true
+subxt = { workspace = true, features = ["native", "jsonrpsee", "reconnecting-rpc-client"] }
+subxt-core.workspace = true
+subxt-rpcs.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["full"] }

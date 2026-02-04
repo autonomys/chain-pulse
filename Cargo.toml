@@ -8,6 +8,8 @@ repository = "https://github.com/autonomys/subspace-chain-alerts"
 resolver = "2"
 members = [
     "alerter",
+    "indexer",
+    "shared",
 ]
 
 [workspace.dependencies]
@@ -19,19 +21,28 @@ humantime = "2.3.0"
 libp2p = { version = "0.56.0", default-features = false }
 libp2p-connection-limits = "0.6.0"
 log = "0.4.28"
+hex-literal = "1.1.0"
 parity-scale-codec = "3.7.5"
 reqwest = { version = "0.12.24", default-features = false }
+pgtemp = "0.7.1"
 rust_decimal = "1.39.0"
+scale-encode = "0.10.1"
 scale-decode = "0.16.0"
 scale-decode-derive = "0.16.0"
 serde = "1.0.228"
+shared = { path = "shared" }
 slack-morphism = "2.16.0"
 sp-blockchain = "42.0.0"
+sp-core = "39.0.0"
+sp-crypto-hashing = "0.1.0"
 sp-runtime = "44.0.0"
+sqlx = { version = "0.8.6", default-features = false }
 substrate-p2p = { git = "https://github.com/vedhavyas/substrate-p2p", rev = "85ae0388b1f080d2c282e2d9f7a5322656753845" }
 subxt = { version = "0.44.0", default-features = false }
 subxt-core = "0.44.0"
 subxt-rpcs = "0.44.0"
+tracing = "0.1.44"
+tracing-subscriber = "0.3.22"
 thiserror = "2.0.17"
 tokio = "1.48.0"
 toml = "0.9.8"
@@ -47,3 +58,9 @@ overflow-checks = true
 [profile.production]
 inherits = "release"
 lto = "fat"
+
+[workspace.lints.rust]
+unused_crate_dependencies = "forbid"
+warnings = "deny"
+rust_2018_idioms = { level = "deny", priority = -1 }
+unsafe_code = "forbid"

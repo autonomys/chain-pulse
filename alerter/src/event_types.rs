@@ -1,7 +1,7 @@
 //! Events types that are being monitored
 
-use crate::subspace::{AccountId, Balance, BlockHash, BlockNumber};
 use scale_decode_derive::DecodeAsType;
+use shared::subspace::{AccountId, Balance, BlockHash, BlockNumber};
 use sp_runtime::DispatchResult;
 use std::fmt;
 use subxt_core::events::StaticEvent;

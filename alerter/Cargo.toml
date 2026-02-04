@@ -6,6 +6,9 @@ authors.workspace = true
 homepage.workspace = true
 repository.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 clap = { workspace = true, features = ["derive"] }
 env_logger.workspace = true
@@ -21,6 +24,7 @@ rust_decimal.workspace = true
 scale-decode.workspace = true
 scale-decode-derive.workspace = true
 serde = { workspace = true, features = ["derive"] }
+shared.workspace = true
 slack-morphism = { workspace = true, features = ["hyper"] }
 sp-blockchain.workspace = true
 sp-runtime.workspace = true

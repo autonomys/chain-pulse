@@ -1,18 +1,20 @@
 //! Module that follows the chain and broadcast blocks data.
 use crate::error::Error;
+use crate::types::{EventSegmentSize, system_event_segment_key};
 use futures_util::stream::Fuse;
 use futures_util::{StreamExt, TryStreamExt, stream};
 use log::{debug, error, info, warn};
-use sp_blockchain::{CachedHeaderMetadata, HashAndNumber, TreeRoute};
+use sp_blockchain::{CachedHeaderMetadata, TreeRoute};
 use sp_runtime::app_crypto::sp_core::crypto::Ss58AddressFormat;
 use sp_runtime::codec::{Decode, Encode};
 use sp_runtime::traits::{BlakeTwo256, Block as BlockT, Header as HeaderT};
 use sp_runtime::{OpaqueExtrinsic, generic};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
+use subxt::backend::BackendExt;
 use subxt::client::ClientRuntimeUpdater;
 use subxt::config::substrate::SubstrateHeader;
-use subxt::events::Events;
+use subxt::events::{EventDetails, Events};
 use subxt::{OnlineClient, SubstrateConfig};
 use subxt_core::Config;
 use subxt_core::storage::address::StorageKey;
@@ -22,36 +24,78 @@ use tokio::sync::broadcast::{Receiver, Sender, channel};
 /// Opaque block header type.
 type Header = generic::Header<u32, BlakeTwo256>;
 /// Opaque block type.
-pub(crate) type Block = generic::Block<Header, OpaqueExtrinsic>;
-pub(crate) type BlockHash = <Block as BlockT>::Hash;
-pub(crate) type BlockNumber = <<Block as BlockT>::Header as HeaderT>::Number;
-pub(crate) type AccountId = <SubstrateConfig as Config>::AccountId;
-pub(crate) type Balance = u128;
+pub type Block = generic::Block<Header, OpaqueExtrinsic>;
+pub type BlockHash = <Block as BlockT>::Hash;
+pub type BlockNumber = <<Block as BlockT>::Header as HeaderT>::Number;
+pub type AccountId = <SubstrateConfig as Config>::AccountId;
+pub type Balance = u128;
+pub type HashAndNumber = sp_blockchain::HashAndNumber<Block>;
 type SubspaceClient = OnlineClient<SubstrateConfig>;
 type SubspaceRpcClient = LegacyRpcMethods<SubstrateConfig>;
 type BlocksSink = Sender<BlocksExt>;
-pub(crate) type BlocksStream = Receiver<BlocksExt>;
+pub type BlocksStream = Receiver<BlocksExt>;
 type SubxtBlockStream =
     Fuse<subxt::backend::StreamOfResults<subxt::blocks::Block<SubstrateConfig, SubspaceClient>>>;
 
 /// Subspace slot type.
-pub(crate) type Slot = u64;
+pub type Slot = u64;
 /// Subspace timestamp type.
 pub(crate) type Timestamp = u64;
+
+/// Block provider for subspace
+pub struct SubspaceBlockProvider {
+    rpc: Arc<SubspaceRpcClient>,
+    client: Arc<SubspaceClient>,
+}
+
+impl SubspaceBlockProvider {
+    pub async fn block_ext_at_number(&self, block_number: BlockNumber) -> Result<BlockExt, Error> {
+        let block_hash = self
+            .rpc
+            .chain_get_block_hash(Some(block_number.into()))
+            .await?
+            .ok_or(Error::MissingBlockHeaderForNumber(block_number))?;
+        self.block_ext_at_hash(block_hash).await
+    }
+
+    pub async fn block_ext_at_hash(&self, block_hash: BlockHash) -> Result<BlockExt, Error> {
+        let header = self
+            .rpc
+            .chain_get_header(Some(block_hash))
+            .await?
+            .ok_or(Error::MissingBlockHeaderForHash(block_hash))?;
+        let SubstrateHeader {
+            parent_hash,
+            number,
+            state_root,
+            extrinsics_root,
+            ..
+        } = header;
+
+        Ok(BlockExt {
+            number,
+            hash: block_hash,
+            parent_hash,
+            state_root,
+            extrinsics_root,
+            client: self.client.clone(),
+        })
+    }
+}
+
 /// Block with extracted details.
 #[derive(Debug, Clone)]
-#[expect(dead_code, reason = "included for block details completeness")]
-pub(crate) struct BlockExt {
-    pub(crate) number: BlockNumber,
-    pub(crate) hash: BlockHash,
-    pub(crate) parent_hash: BlockHash,
-    pub(crate) state_root: BlockHash,
-    pub(crate) extrinsics_root: BlockHash,
+pub struct BlockExt {
+    pub number: BlockNumber,
+    pub hash: BlockHash,
+    pub parent_hash: BlockHash,
+    pub state_root: BlockHash,
+    pub extrinsics_root: BlockHash,
     client: Arc<SubspaceClient>,
 }
 
 impl BlockExt {
-    async fn read_storage<Args: StorageKey, T: Decode>(
+    pub async fn read_storage<Args: StorageKey, T: Decode>(
         &self,
         pallet: &str,
         storage: &str,
@@ -104,24 +148,49 @@ impl BlockExt {
     }
 
     /// Returns block events
-    pub(crate) async fn events(&self) -> Result<Events<SubstrateConfig>, Error> {
+    pub async fn events(&self) -> Result<Events<SubstrateConfig>, Error> {
         let events = self.client.events().at(self.hash).await?;
         Ok(events)
+    }
+
+    pub async fn events_from_segments(&self) -> Result<Vec<EventDetails<SubstrateConfig>>, Error> {
+        let segment_size = self.client.constants().at(&EventSegmentSize)?;
+        let event_count = self
+            .read_storage::<_, u32>("System", "EventCount", ())
+            .await?;
+        let max_segment = event_count / segment_size;
+        let mut total_events = vec![];
+        let backend = self.client.backend();
+        for segment in 0..=max_segment {
+            let key = system_event_segment_key(segment);
+            let data = backend.storage_fetch_value(key.clone(), self.hash).await?;
+            if let Some(event_data) = data {
+                let events =
+                    Events::<SubstrateConfig>::decode_from(event_data, self.client.metadata())
+                        .iter()
+                        .filter_map(|event| event.ok())
+                        .collect::<Vec<_>>();
+                total_events.extend(events);
+            }
+        }
+
+        total_events.truncate(event_count as usize);
+        Ok(total_events)
     }
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct ReorgData {
-    pub(crate) enacted: Vec<HashAndNumber<Block>>,
-    pub(crate) retracted: Vec<HashAndNumber<Block>>,
-    pub(crate) common_block: HashAndNumber<Block>,
+pub struct ReorgData {
+    pub enacted: Vec<HashAndNumber>,
+    pub retracted: Vec<HashAndNumber>,
+    pub common_block: HashAndNumber,
 }
 
 /// Best blocks that have been enacted and potential re-org depth if there was a re-org.
 #[derive(Debug, Clone)]
-pub(crate) struct BlocksExt {
-    pub(crate) blocks: Vec<BlockExt>,
-    pub(crate) maybe_reorg_data: Option<ReorgData>,
+pub struct BlocksExt {
+    pub blocks: Vec<BlockExt>,
+    pub maybe_reorg_data: Option<ReorgData>,
 }
 
 /// Maximum number of headers to load in the cache.
@@ -129,7 +198,7 @@ const CACHE_HEADER_DEPTH: u32 = 100;
 
 /// Overarching Subspace network wrapper
 /// for listening blocks, read storages etc..
-pub(crate) struct Subspace {
+pub struct Subspace {
     rpc: Arc<SubspaceRpcClient>,
     client: Arc<SubspaceClient>,
     sink: BlocksSink,
@@ -137,16 +206,16 @@ pub(crate) struct Subspace {
 }
 
 /// Network specific details
-pub(crate) struct NetworkDetails {
-    pub(crate) name: String,
-    pub(crate) ss58_format: Ss58AddressFormat,
-    pub(crate) token_symbol: String,
-    pub(crate) token_decimals: u8,
-    pub(crate) genesis_hash: BlockHash,
+pub struct NetworkDetails {
+    pub name: String,
+    pub ss58_format: Ss58AddressFormat,
+    pub token_symbol: String,
+    pub token_decimals: u8,
+    pub genesis_hash: BlockHash,
 }
 
 impl Subspace {
-    pub(crate) async fn new_from_url(url: &str) -> Result<Self, Error> {
+    pub async fn new_from_url(url: &str) -> Result<Self, Error> {
         let rpc_client = RpcClient::new(
             subxt_rpcs::client::ReconnectingRpcClient::builder()
                 .build(url)
@@ -164,15 +233,22 @@ impl Subspace {
         })
     }
 
-    pub(crate) fn runtime_metadata_updater(&self) -> ClientRuntimeUpdater<SubstrateConfig> {
+    pub fn runtime_metadata_updater(&self) -> ClientRuntimeUpdater<SubstrateConfig> {
         self.client.updater()
     }
 
-    pub(crate) fn blocks_stream(&self) -> BlocksStream {
+    pub fn blocks_stream(&self) -> BlocksStream {
         self.stream.resubscribe()
     }
 
-    pub(crate) async fn network_details(&self) -> Result<NetworkDetails, Error> {
+    pub fn block_provider(&self) -> SubspaceBlockProvider {
+        SubspaceBlockProvider {
+            rpc: self.rpc.clone(),
+            client: self.client.clone(),
+        }
+    }
+
+    pub async fn network_details(&self) -> Result<NetworkDetails, Error> {
         let name = self.rpc.system_chain().await?;
         let system_properties = self.rpc.system_properties().await?;
         let genesis_hash = self
@@ -211,7 +287,7 @@ impl Subspace {
     /// and broadcast the best blocks and reorg data.
     // TODO: once subspace client exposes archive_rpc, use it
     //  to load all forks blocks while loading cache
-    pub(crate) async fn listen_for_all_blocks(&self) -> Result<(), Error> {
+    pub async fn listen_for_all_blocks(&self) -> Result<(), Error> {
         let blocks_client = self.client.blocks();
         let mut header_metadata = HeadersMetadataCache::default();
         loop {
@@ -236,7 +312,7 @@ impl Subspace {
     async fn listen_for_blocks(
         &self,
         header_metadata: &mut HeadersMetadataCache,
-        current_best_block: &mut HashAndNumber<Block>,
+        current_best_block: &mut HashAndNumber,
         mut sub: SubxtBlockStream,
     ) -> Result<(), Error> {
         loop {
@@ -354,7 +430,7 @@ impl Subspace {
         &self,
         sub: &mut SubxtBlockStream,
         header_metadata: &mut HeadersMetadataCache,
-    ) -> Result<HashAndNumber<Block>, Error> {
+    ) -> Result<HashAndNumber, Error> {
         let mut latest_block_hash = None;
         while latest_block_hash.is_none() {
             let block = sub.next().await.ok_or(Error::MissingBlock)??;

@@ -1,5 +1,4 @@
 use crate::error::Error;
-use crate::subspace::{BlockHash, BlockNumber, Slot};
 use futures_util::StreamExt;
 use libp2p::kad::Event as KadEvent;
 use libp2p::multiaddr::Protocol as MultiAddrProtocol;
@@ -8,6 +7,7 @@ use libp2p::{Multiaddr, PeerId, Swarm, SwarmBuilder, noise, tcp, yamux};
 use libp2p_connection_limits::Behaviour as ConnectionLimits;
 use log::{debug, error, info};
 use parity_scale_codec::{Decode, Encode};
+use shared::subspace::{BlockHash, BlockNumber, Slot};
 use std::collections::BTreeSet;
 use std::num::NonZeroU32;
 use std::time::{Duration, Instant};

@@ -3,16 +3,18 @@
 # Container images are only marked as "latest" in GitHub Container Registry for pushes to `main` and tags (including release tags).
 name: Docker build
 
-# This action is triggered for every tag and workflow_dispatch.
+# This action is triggered for workflow_dispatch.
 on:
-  push:
-    tags:
-      - "*"
   workflow_dispatch:
+    inputs:
+      service:
+        type: choice
+        description: Build Docker image for service
+        options:
+          - indexer
+          - alerter
 
-concurrency:
-  group: docker-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+run-name: Docker build for ${{ inputs.service }}
 
 # Incremental compilation here isn't helpful
 env:
@@ -22,6 +24,7 @@ env:
 jobs:
   # This will build container images
   docker-build:
+    name: ${{ inputs.service }}
     runs-on: ubuntu-24.04
     permissions:
       packages: write
@@ -50,7 +53,7 @@ jobs:
         uses: docker/metadata-action@8e5442c4ef9f78752691e2d8f8d19755c6f78e81 # v5.5.1
         with:
           images: |
-            ghcr.io/${{ github.repository_owner }}/chain-alerter
+            ghcr.io/${{ github.repository_owner }}/chain-${{ inputs.service }}
           tags: |
             type=ref,event=tag
             type=ref,event=branch
@@ -59,10 +62,10 @@ jobs:
             latest=false
             suffix=
 
-      - name: Build and push chain-alerter image
+      - name: Build and push chain-${{ inputs.service }} image
         uses: docker/build-push-action@4f58ea79222b3b9dc2c8bbdd6debcef730109a75 # v6.9.0
         with:
-          file: docker/alerter.Dockerfile
+          file: docker/${{ inputs.service }}.Dockerfile
           # TODO: Add linux/amd64/v4 when runner supports it
           platforms: linux/amd64,linux/amd64/v2,linux/amd64/v3,linux/arm64
           pull: true
