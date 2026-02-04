@@ -60,7 +60,6 @@ inherits = "release"
 lto = "fat"
 
 [workspace.lints.rust]
-unused_crate_dependencies = "forbid"
 warnings = "deny"
 rust_2018_idioms = { level = "deny", priority = -1 }
 unsafe_code = "forbid"
