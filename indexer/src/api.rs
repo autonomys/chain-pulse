@@ -1,6 +1,5 @@
 use crate::WebState;
 use crate::error::Error;
-use crate::storage::Db;
 use crate::types::{ChainId, DomainId};
 use crate::xdm::get_processor_key;
 use actix_web::{Responder, get, web};
@@ -20,12 +19,12 @@ pub(crate) struct Health {
 }
 
 #[get("/health")]
-async fn health_check(data: web::Data<Db>) -> Result<impl Responder, Error> {
+async fn health_check(data: web::Data<WebState>) -> Result<impl Responder, Error> {
     let cn_key = get_processor_key(&ChainId::Consensus);
     let aen_key = get_processor_key(&ChainId::Domain(DomainId(0)));
     let (cn, aen) = try_join!(
-        data.get_last_processed_block(&cn_key),
-        data.get_last_processed_block(&aen_key),
+        data.db.get_last_processed_block(&cn_key),
+        data.db.get_last_processed_block(&aen_key),
     )?;
 
     Ok(web::Json(Health {
