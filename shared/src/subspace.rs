@@ -43,6 +43,7 @@ pub type Slot = u64;
 pub(crate) type Timestamp = u64;
 
 /// Block provider for subspace
+#[derive(Clone)]
 pub struct SubspaceBlockProvider {
     rpc: Arc<SubspaceRpcClient>,
     client: Arc<SubspaceClient>,

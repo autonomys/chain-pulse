@@ -12,6 +12,8 @@ use subxt::events::{EventDetails, StaticEvent};
 use subxt::storage::StaticStorageKey;
 use tracing::info;
 
+const CHECKPOINT_PROCESSED_BLOCK: u32 = 100;
+
 fn get_processor_key(chain_id: &ChainId) -> String {
     format!("xdm_processor_{chain_id}")
 }
@@ -65,13 +67,26 @@ pub(crate) async fn index_xdm(
         }
 
         info!("Indexing blocks from[{from}] to to[{to}]...");
-        stream::iter((from..=to).map(|block| {
-            index_events_for_block(&chain, block, &db, &block_provider, &processor_key)
+        let mut s = stream::iter((from..=to).map(|block| {
+            let chain = &chain;
+            let db = &db;
+            let block_provider = &block_provider;
+            async move {
+                index_events_for_block(chain, block, db, block_provider)
+                    .await
+                    .map(|_| block)
+            }
         }))
-        .buffered(process_blocks_in_parallel as usize)
-        .try_collect::<Vec<_>>()
-        .await?;
+        .buffered(process_blocks_in_parallel as usize);
 
+        while let Some(block) = s.try_next().await? {
+            if block.is_multiple_of(CHECKPOINT_PROCESSED_BLOCK) {
+                info!("Indexed block: {}", block);
+                db.set_last_processed_block(&processor_key, block).await?;
+            }
+        }
+
+        info!("Indexed block: {}", to);
         db.set_last_processed_block(&processor_key, to).await?;
     }
 }
@@ -81,7 +96,6 @@ async fn index_events_for_block(
     block_number: BlockNumber,
     db: &Db,
     block_provider: &SubspaceBlockProvider,
-    processor_key: &str,
 ) -> Result<(), Error> {
     let block_ext = block_provider.block_ext_at_number(block_number).await?;
     let events = extract_xdm_events_for_block(chain, &block_ext).await?;
@@ -94,9 +108,6 @@ async fn index_events_for_block(
         db.store_events(chain, block, events).await?;
     }
 
-    info!("Indexed block: {}[{}]", block_ext.number, block_ext.hash);
-    db.set_last_processed_block(processor_key, block_ext.number)
-        .await?;
     Ok(())
 }
 
