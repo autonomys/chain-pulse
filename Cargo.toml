@@ -13,6 +13,8 @@ members = [
 ]
 
 [workspace.dependencies]
+actix-web = "4.12.1"
+actix-cors = "0.7.1"
 clap = "4.5.48"
 env_logger = "0.11.8"
 futures-util = "0.3.31"
@@ -25,7 +27,7 @@ hex-literal = "1.1.0"
 parity-scale-codec = "3.7.5"
 reqwest = { version = "0.12.24", default-features = false }
 pgtemp = "0.7.1"
-rust_decimal = "1.39.0"
+rust_decimal = "1.40.0"
 scale-encode = "0.10.1"
 scale-decode = "0.16.0"
 scale-decode-derive = "0.16.0"

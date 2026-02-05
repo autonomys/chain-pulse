@@ -2,12 +2,39 @@ use parity_scale_codec::Decode;
 use scale_decode::DecodeAsType;
 use scale_decode::ext::primitive_types::U256;
 use scale_encode::EncodeAsType;
+use serde::{Deserialize, Serialize};
 use shared::subspace::Balance;
+use sqlx::error::BoxDynError;
+use sqlx::postgres::{PgTypeInfo, PgValueRef};
+use sqlx::{Decode as SqlxDecode, Postgres, Type};
 use std::fmt::{Debug, Display, Formatter};
 use subxt::events::StaticEvent;
 use subxt::utils::{AccountId32, H160, to_hex};
 
-#[derive(Debug, Copy, Clone, Decode, DecodeAsType, EncodeAsType, Eq, PartialEq)]
+#[derive(Serialize, Deserialize, Default, PartialEq, Debug, Copy, Clone)]
+pub(crate) struct U128Compat(pub(crate) u128);
+
+impl<'r> SqlxDecode<'r, Postgres> for U128Compat {
+    fn decode(value: PgValueRef<'r>) -> Result<Self, BoxDynError> {
+        let bd = <String as SqlxDecode<Postgres>>::decode(value)?;
+        let decoded = bd.parse::<u128>()?;
+        Ok(Self(decoded))
+    }
+}
+
+impl Type<Postgres> for U128Compat {
+    fn type_info() -> PgTypeInfo {
+        PgTypeInfo::with_name("NUMERIC")
+    }
+
+    fn compatible(ty: &PgTypeInfo) -> bool {
+        ty.type_eq(&PgTypeInfo::with_name("TEXT"))
+    }
+}
+
+#[derive(
+    Serialize, Deserialize, Debug, Copy, Clone, Decode, DecodeAsType, EncodeAsType, Eq, PartialEq,
+)]
 pub(crate) struct U256Compat([u64; 4]);
 
 impl From<U256> for U256Compat {

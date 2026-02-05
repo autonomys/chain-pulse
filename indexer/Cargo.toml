@@ -7,11 +7,15 @@ homepage.workspace = true
 repository.workspace = true
 
 [dependencies]
+actix-web.workspace = true
+actix-cors.workspace = true
 clap = { workspace = true, features = ["derive", "env"] }
 futures-util.workspace = true
 parity-scale-codec = { workspace = true, features = ["derive"] }
+rust_decimal.workspace = true
 scale-encode.workspace = true
 scale-decode.workspace = true
+serde.workspace = true
 shared.workspace = true
 sp-core.workspace = true
 subxt = { workspace = true, features = ["native", "jsonrpsee", "reconnecting-rpc-client"] }
