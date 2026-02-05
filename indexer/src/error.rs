@@ -1,3 +1,4 @@
+use actix_web::ResponseError;
 use sqlx::migrate::MigrateError;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::task::JoinError;
@@ -26,3 +27,5 @@ impl From<subxt::Error> for Error {
         Self::Subspace(shared::error::Error::from(e))
     }
 }
+
+impl ResponseError for Error {}

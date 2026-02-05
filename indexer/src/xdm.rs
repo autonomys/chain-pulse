@@ -14,7 +14,7 @@ use tracing::info;
 
 const CHECKPOINT_PROCESSED_BLOCK: u32 = 100;
 
-fn get_processor_key(chain_id: &ChainId) -> String {
+pub(crate) fn get_processor_key(chain_id: &ChainId) -> String {
     format!("xdm_processor_{chain_id}")
 }
 

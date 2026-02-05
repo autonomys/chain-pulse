@@ -1,14 +1,118 @@
+use crate::api;
+use crate::api::{BlockDetails, MaybeBlockDetails};
 use crate::error::Error;
 use crate::types::{
     ChainId, Event, IncomingTransferSuccessful, Location, OutgoingTransferInitiatedWithTransfer,
-    Transfer, XdmMessageId,
+    Transfer, U128Compat, XdmMessageId,
 };
+use rust_decimal::Decimal;
 use shared::subspace::{BlockNumber, HashAndNumber};
 use sqlx::PgPool;
+use std::ops::Div;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use subxt::utils::to_hex;
+use tracing::info;
+
+pub(crate) async fn log_db_pool_info(db: Db, every: Duration) -> Result<(), Error> {
+    let pool = db.pool.clone();
+    let mut tick = tokio::time::interval(every);
+    loop {
+        tick.tick().await;
+
+        let size = pool.size();
+        let idle = pool.num_idle();
+        let in_use = size.saturating_sub(idle as u32);
+        let saturated = pool.try_acquire().is_none();
+        let closed = pool.is_closed();
+
+        info!(
+            target: "db.pool",
+            "size: {size}, idle: {idle}, in_use: {in_use}, saturated: {saturated}, closed: {closed}",
+        );
+    }
+}
+
+#[derive(sqlx::FromRow)]
+pub(crate) struct XdmTransfer {
+    src_chain: String,
+    dst_chain: String,
+    channel_id: String,
+    nonce: String,
+    sender: Option<String>,
+    receiver: Option<String>,
+    amount: Option<U128Compat>,
+    transfer_initiated_block_number: Option<i64>,
+    transfer_initiated_block_hash: Option<String>,
+    transfer_executed_on_dst_block_number: Option<i64>,
+    transfer_executed_on_dst_block_hash: Option<String>,
+    transfer_acknowledged_on_src_block_number: Option<i64>,
+    transfer_acknowledged_on_src_block_hash: Option<String>,
+    transfer_successful: Option<bool>,
+}
+
+impl From<(Option<i64>, Option<String>)> for MaybeBlockDetails {
+    fn from(value: (Option<i64>, Option<String>)) -> Self {
+        if let (Some(block_number), Some(block_hash)) = value {
+            MaybeBlockDetails(Some(BlockDetails {
+                block_number: block_number as BlockNumber,
+                block_hash,
+            }))
+        } else {
+            MaybeBlockDetails(None)
+        }
+    }
+}
+
+impl From<(Decimal, XdmTransfer)> for api::XdmTransfer {
+    fn from(value: (Decimal, XdmTransfer)) -> Self {
+        let (decimal_scale, transfer) = (value.0, value.1);
+        let XdmTransfer {
+            src_chain,
+            dst_chain,
+            channel_id,
+            nonce,
+            sender,
+            receiver,
+            amount,
+            transfer_initiated_block_number,
+            transfer_initiated_block_hash,
+            transfer_executed_on_dst_block_number,
+            transfer_executed_on_dst_block_hash,
+            transfer_acknowledged_on_src_block_number,
+            transfer_acknowledged_on_src_block_hash,
+            transfer_successful,
+        } = transfer;
+
+        let amount = amount.map(|amount| Decimal::from(amount.0).div(decimal_scale));
+        api::XdmTransfer {
+            src_chain,
+            dst_chain,
+            channel_id,
+            nonce,
+            sender,
+            receiver,
+            amount,
+            initiated_src_block: (
+                transfer_initiated_block_number,
+                transfer_initiated_block_hash,
+            )
+                .into(),
+            executed_dst_block: (
+                transfer_executed_on_dst_block_number,
+                transfer_executed_on_dst_block_hash,
+            )
+                .into(),
+            acknowledged_src_block: (
+                transfer_acknowledged_on_src_block_number,
+                transfer_acknowledged_on_src_block_hash,
+            )
+                .into(),
+            transfer_successful,
+        }
+    }
+}
 
 #[derive(Clone)]
 pub(crate) struct Db {
@@ -248,6 +352,28 @@ impl Db {
             .execute(&*self.pool)
             .await?;
         Ok(())
+    }
+
+    pub(crate) async fn get_xdm_transfer_for_address(
+        &self,
+        address: &str,
+    ) -> Result<Vec<XdmTransfer>, Error> {
+        let transfers = sqlx::query_as::<_, XdmTransfer>(
+            r#"
+            select src_chain, dst_chain, channel_id::text, nonce::text,
+                   sender, receiver, amount::text,
+                   transfer_initiated_block_number, transfer_initiated_block_hash,
+                   transfer_executed_on_dst_block_number, transfer_executed_on_dst_block_hash,
+                   transfer_acknowledged_on_src_block_number, transfer_acknowledged_on_src_block_hash,
+                   transfer_successful from indexer.xdm_transfers
+            where sender = $1 or receiver = $1
+        "#,
+        )
+        .bind(address)
+        .fetch_all(&*self.pool)
+        .await?;
+
+        Ok(transfers)
     }
 }
 
