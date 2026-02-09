@@ -40,7 +40,7 @@ type SubxtBlockStream =
 /// Subspace slot type.
 pub type Slot = u64;
 /// Subspace timestamp type.
-pub(crate) type Timestamp = u64;
+pub type Timestamp = u64;
 
 /// Block provider for subspace
 #[derive(Clone)]
@@ -113,8 +113,7 @@ impl BlockExt {
     }
 
     /// Returns block timestamp.
-    #[expect(dead_code, reason = "included for later use")]
-    pub(crate) async fn timestamp(&self) -> Result<Timestamp, Error> {
+    pub async fn timestamp(&self) -> Result<Timestamp, Error> {
         self.read_storage("Timestamp", "Now", ()).await
     }
 

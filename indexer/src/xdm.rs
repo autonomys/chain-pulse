@@ -7,6 +7,7 @@ use crate::types::{
 };
 use futures_util::{StreamExt, TryStreamExt, stream};
 use shared::subspace::{BlockExt, BlockNumber, BlocksStream, HashAndNumber, SubspaceBlockProvider};
+use sqlx::types::chrono::DateTime;
 use subxt::SubstrateConfig;
 use subxt::events::{EventDetails, StaticEvent};
 use subxt::storage::StaticStorageKey;
@@ -105,7 +106,9 @@ async fn index_events_for_block(
             hash: block_ext.hash,
         };
         info!("Storing {} events for block[{block:?}", events.len(),);
-        db.store_events(chain, block, events).await?;
+        let block_time = DateTime::from_timestamp_millis(block_ext.timestamp().await? as i64)
+            .expect("should always be a valid Unix epoch time");
+        db.store_events(chain, block, block_time, events).await?;
     }
 
     Ok(())

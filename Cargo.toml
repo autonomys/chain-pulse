@@ -15,6 +15,7 @@ members = [
 [workspace.dependencies]
 actix-web = "4.12.1"
 actix-cors = "0.7.1"
+chrono = "0.4.43"
 clap = "4.5.48"
 env_logger = "0.11.8"
 futures-util = "0.3.31"
