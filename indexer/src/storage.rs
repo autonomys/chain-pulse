@@ -393,12 +393,34 @@ impl Db {
                    transfer_executed_on_dst_block_number, transfer_executed_on_dst_block_hash, transfer_executed_on_dst_at,
                    transfer_acknowledged_on_src_block_number, transfer_acknowledged_on_src_block_hash, transfer_acknowledged_on_src_at,
                    transfer_successful from indexer.xdm_transfers
-            where sender = $1 or receiver = $1 order by transfer_initiated_on_src_at desc 
+            where sender = $1 or receiver = $1 order by transfer_initiated_on_src_at desc
         "#,
         )
-        .bind(address)
-        .fetch_all(&*self.pool)
-        .await?;
+            .bind(address)
+            .fetch_all(&*self.pool)
+            .await?;
+
+        Ok(transfers)
+    }
+
+    pub(crate) async fn get_recent_xdm_transfers(
+        &self,
+        limit: u64,
+    ) -> Result<Vec<XdmTransfer>, Error> {
+        let transfers = sqlx::query_as::<_, XdmTransfer>(
+            r#"
+            select src_chain, dst_chain, channel_id::text, nonce::text,
+                   sender, receiver, amount::text,
+                   transfer_initiated_block_number, transfer_initiated_block_hash, transfer_initiated_on_src_at,
+                   transfer_executed_on_dst_block_number, transfer_executed_on_dst_block_hash, transfer_executed_on_dst_at,
+                   transfer_acknowledged_on_src_block_number, transfer_acknowledged_on_src_block_hash, transfer_acknowledged_on_src_at,
+                   transfer_successful from indexer.xdm_transfers
+            order by transfer_initiated_on_src_at desc limit $1
+        "#,
+        )
+            .bind(limit as i64)
+            .fetch_all(&*self.pool)
+            .await?;
 
         Ok(transfers)
     }

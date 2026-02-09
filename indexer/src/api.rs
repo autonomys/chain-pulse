@@ -5,9 +5,11 @@ use crate::xdm::get_processor_key;
 use actix_web::{Responder, get, web};
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use shared::subspace::BlockNumber;
 use tokio::try_join;
+
+const MAX_RECENT_TRANSFERS: u64 = 10;
 
 pub(crate) fn health_config(cfg: &mut web::ServiceConfig) {
     cfg.service(health_check);
@@ -35,7 +37,11 @@ async fn health_check(data: web::Data<WebState>) -> Result<impl Responder, Error
 }
 
 pub(crate) fn xdm_config(cfg: &mut web::ServiceConfig) {
-    cfg.service(web::scope("/v1/xdm").service(xdm_address_transfers));
+    cfg.service(
+        web::scope("/v1/xdm")
+            .service(xdm_address_transfers)
+            .service(recent_xdm_transfers),
+    );
 }
 
 #[derive(Serialize)]
@@ -73,6 +79,38 @@ async fn xdm_address_transfers(
     let transfers = data
         .db
         .get_xdm_transfer_for_address(&address)
+        .await?
+        .into_iter()
+        .map(|transfer| (decimal_scale, transfer).into())
+        .collect::<Vec<XdmTransfer>>();
+    Ok(web::Json(transfers))
+}
+
+#[derive(Deserialize)]
+struct RecentXdmTransfersQuery {
+    #[serde(default = "max_recent_transfers_limit")]
+    limit: u64,
+}
+
+fn max_recent_transfers_limit() -> u64 {
+    MAX_RECENT_TRANSFERS
+}
+
+#[get("/recent")]
+async fn recent_xdm_transfers(
+    data: web::Data<WebState>,
+    info: web::Query<RecentXdmTransfersQuery>,
+) -> Result<impl Responder, Error> {
+    let RecentXdmTransfersQuery { limit } = info.into_inner();
+    let limit = if limit > MAX_RECENT_TRANSFERS {
+        MAX_RECENT_TRANSFERS
+    } else {
+        limit
+    };
+    let decimal_scale = data.decimal_scale;
+    let transfers = data
+        .db
+        .get_recent_xdm_transfers(limit)
         .await?
         .into_iter()
         .map(|transfer| (decimal_scale, transfer).into())
