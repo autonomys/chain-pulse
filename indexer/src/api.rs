@@ -3,6 +3,7 @@ use crate::error::Error;
 use crate::types::{ChainId, DomainId};
 use crate::xdm::get_processor_key;
 use actix_web::{Responder, get, web};
+use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::Serialize;
 use shared::subspace::BlockNumber;
@@ -41,6 +42,7 @@ pub(crate) fn xdm_config(cfg: &mut web::ServiceConfig) {
 pub(crate) struct BlockDetails {
     pub(crate) block_number: BlockNumber,
     pub(crate) block_hash: String,
+    pub(crate) block_time: DateTime<Utc>,
 }
 
 #[derive(Serialize)]

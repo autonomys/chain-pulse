@@ -5,6 +5,7 @@ use crate::types::{
     ChainId, Event, IncomingTransferSuccessful, Location, OutgoingTransferInitiatedWithTransfer,
     Transfer, U128Compat, XdmMessageId,
 };
+use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use shared::subspace::{BlockNumber, HashAndNumber};
 use sqlx::PgPool;
@@ -45,19 +46,23 @@ pub(crate) struct XdmTransfer {
     amount: Option<U128Compat>,
     transfer_initiated_block_number: Option<i64>,
     transfer_initiated_block_hash: Option<String>,
+    transfer_initiated_on_src_at: Option<DateTime<Utc>>,
     transfer_executed_on_dst_block_number: Option<i64>,
     transfer_executed_on_dst_block_hash: Option<String>,
+    transfer_executed_on_dst_at: Option<DateTime<Utc>>,
     transfer_acknowledged_on_src_block_number: Option<i64>,
     transfer_acknowledged_on_src_block_hash: Option<String>,
+    transfer_acknowledged_on_src_at: Option<DateTime<Utc>>,
     transfer_successful: Option<bool>,
 }
 
-impl From<(Option<i64>, Option<String>)> for MaybeBlockDetails {
-    fn from(value: (Option<i64>, Option<String>)) -> Self {
-        if let (Some(block_number), Some(block_hash)) = value {
+impl From<(Option<i64>, Option<String>, Option<DateTime<Utc>>)> for MaybeBlockDetails {
+    fn from(value: (Option<i64>, Option<String>, Option<DateTime<Utc>>)) -> Self {
+        if let (Some(block_number), Some(block_hash), Some(block_time)) = value {
             MaybeBlockDetails(Some(BlockDetails {
                 block_number: block_number as BlockNumber,
                 block_hash,
+                block_time,
             }))
         } else {
             MaybeBlockDetails(None)
@@ -78,10 +83,13 @@ impl From<(Decimal, XdmTransfer)> for api::XdmTransfer {
             amount,
             transfer_initiated_block_number,
             transfer_initiated_block_hash,
+            transfer_initiated_on_src_at,
             transfer_executed_on_dst_block_number,
             transfer_executed_on_dst_block_hash,
+            transfer_executed_on_dst_at,
             transfer_acknowledged_on_src_block_number,
             transfer_acknowledged_on_src_block_hash,
+            transfer_acknowledged_on_src_at,
             transfer_successful,
         } = transfer;
 
@@ -97,16 +105,19 @@ impl From<(Decimal, XdmTransfer)> for api::XdmTransfer {
             initiated_src_block: (
                 transfer_initiated_block_number,
                 transfer_initiated_block_hash,
+                transfer_initiated_on_src_at,
             )
                 .into(),
             executed_dst_block: (
                 transfer_executed_on_dst_block_number,
                 transfer_executed_on_dst_block_hash,
+                transfer_executed_on_dst_at,
             )
                 .into(),
             acknowledged_src_block: (
                 transfer_acknowledged_on_src_block_number,
                 transfer_acknowledged_on_src_block_hash,
+                transfer_acknowledged_on_src_at,
             )
                 .into(),
             transfer_successful,
@@ -179,12 +190,13 @@ impl Db {
         &self,
         src_chain: &ChainId,
         block: HashAndNumber,
+        block_time: DateTime<Utc>,
         events: Vec<Event>,
     ) -> Result<(), Error> {
         for event in events {
             match event {
                 Event::OutgoingTransferInitiated(transfer) => {
-                    self.store_outgoing_transfer_initiated(&block, transfer)
+                    self.store_outgoing_transfer_initiated(&block, &block_time, transfer)
                         .await?
                 }
                 Event::OutgoingTransferFailed(transfer) => {
@@ -192,6 +204,7 @@ impl Db {
                         &block,
                         src_chain,
                         transfer.chain_id,
+                        &block_time,
                         transfer.message_id,
                         false,
                     )
@@ -202,13 +215,14 @@ impl Db {
                         &block,
                         src_chain,
                         transfer.chain_id,
+                        &block_time,
                         transfer.message_id,
                         true,
                     )
                     .await?
                 }
                 Event::IncomingTransferSuccessful(transfer) => {
-                    self.store_incoming_transfer_acknowledgement(&block, src_chain, transfer)
+                    self.store_incoming_transfer_execution(&block, src_chain, &block_time, transfer)
                         .await?
                 }
             }
@@ -216,10 +230,11 @@ impl Db {
         Ok(())
     }
 
-    async fn store_incoming_transfer_acknowledgement(
+    async fn store_incoming_transfer_execution(
         &self,
         block: &HashAndNumber,
         dst_chain: &ChainId,
+        block_time: &DateTime<Utc>,
         transfer: IncomingTransferSuccessful,
     ) -> Result<(), Error> {
         let HashAndNumber { hash, number } = block;
@@ -233,13 +248,16 @@ impl Db {
         let query = sqlx::query(
             r#"
         insert into indexer.xdm_transfers (
-            src_chain, dst_chain, channel_id, nonce, amount, transfer_executed_on_dst_block_number, transfer_executed_on_dst_block_hash, transfer_successful)
-        values ($1, $2, $3::numeric(78, 0), $4::numeric(78,0), $5::numeric(39, 0), $6, $7, $8)
+            src_chain, dst_chain, channel_id, nonce, amount,
+            transfer_executed_on_dst_block_number, transfer_executed_on_dst_block_hash, transfer_successful,
+            transfer_executed_on_dst_at)
+        values ($1, $2, $3::numeric(78, 0), $4::numeric(78,0), $5::numeric(39, 0), $6, $7, $8, $9)
         on conflict (src_chain, dst_chain, channel_id, nonce) do update
         set amount = excluded.amount,
             transfer_executed_on_dst_block_number = excluded.transfer_executed_on_dst_block_number,
             transfer_executed_on_dst_block_hash = excluded.transfer_executed_on_dst_block_hash,
-            transfer_successful = excluded.transfer_successful
+            transfer_successful = excluded.transfer_successful,
+            transfer_executed_on_dst_at = excluded.transfer_executed_on_dst_at
         "#,
         );
 
@@ -252,6 +270,7 @@ impl Db {
             .bind(*number as i64)
             .bind(to_hex(hash))
             .bind(true)
+            .bind(block_time)
             .execute(&*self.pool)
             .await?;
 
@@ -263,6 +282,7 @@ impl Db {
         block: &HashAndNumber,
         src_chain: &ChainId,
         dst_chain: ChainId,
+        block_time: &DateTime<Utc>,
         message_id: XdmMessageId,
         transfer_status: bool,
     ) -> Result<(), Error> {
@@ -272,12 +292,14 @@ impl Db {
         let query = sqlx::query(
             r#"
         insert into indexer.xdm_transfers (
-            src_chain, dst_chain, channel_id, nonce, transfer_acknowledged_on_src_block_number, transfer_acknowledged_on_src_block_hash, transfer_successful)
-        values ($1, $2, $3::numeric(78, 0), $4::numeric(78,0), $5, $6, $7)
+            src_chain, dst_chain, channel_id, nonce, transfer_acknowledged_on_src_block_number,
+            transfer_acknowledged_on_src_block_hash, transfer_successful, transfer_acknowledged_on_src_at)
+        values ($1, $2, $3::numeric(78, 0), $4::numeric(78,0), $5, $6, $7, $8)
         on conflict (src_chain, dst_chain, channel_id, nonce) do update
         set transfer_acknowledged_on_src_block_hash = excluded.transfer_acknowledged_on_src_block_hash,
             transfer_acknowledged_on_src_block_number = excluded.transfer_acknowledged_on_src_block_number,
-            transfer_successful = excluded.transfer_successful
+            transfer_successful = excluded.transfer_successful,
+            transfer_acknowledged_on_src_at = excluded.transfer_acknowledged_on_src_at
         "#,
         );
 
@@ -289,6 +311,7 @@ impl Db {
             .bind(*number as i64)
             .bind(to_hex(hash))
             .bind(transfer_status)
+            .bind(block_time)
             .execute(&*self.pool)
             .await?;
 
@@ -298,6 +321,7 @@ impl Db {
     async fn store_outgoing_transfer_initiated(
         &self,
         initiated_block: &HashAndNumber,
+        block_time: &DateTime<Utc>,
         transfer: OutgoingTransferInitiatedWithTransfer,
     ) -> Result<(), Error> {
         let OutgoingTransferInitiatedWithTransfer {
@@ -328,14 +352,16 @@ impl Db {
         let query = sqlx::query(
             r#"
         insert into indexer.xdm_transfers (
-            src_chain, dst_chain, channel_id, nonce, sender, receiver, amount, transfer_initiated_block_number, transfer_initiated_block_hash)
-        values ($1, $2, $3::numeric(78, 0), $4::numeric(78,0), $5, $6, $7::numeric(39, 0), $8, $9)
+            src_chain, dst_chain, channel_id, nonce, sender, receiver, amount,
+            transfer_initiated_block_number, transfer_initiated_block_hash, transfer_initiated_on_src_at)
+        values ($1, $2, $3::numeric(78, 0), $4::numeric(78,0), $5, $6, $7::numeric(39, 0), $8, $9, $10)
         on conflict (src_chain, dst_chain, channel_id, nonce) do update
         set sender = excluded.sender,
             receiver = excluded.receiver,
             amount = excluded.amount,
             transfer_initiated_block_number = excluded.transfer_initiated_block_number,
-            transfer_initiated_block_hash = excluded.transfer_initiated_block_hash
+            transfer_initiated_block_hash = excluded.transfer_initiated_block_hash,
+            transfer_initiated_on_src_at = excluded.transfer_initiated_on_src_at
         "#,
         );
 
@@ -349,6 +375,7 @@ impl Db {
             .bind(amount.to_string())
             .bind(*number as i64)
             .bind(to_hex(hash))
+            .bind(block_time)
             .execute(&*self.pool)
             .await?;
         Ok(())
@@ -362,11 +389,11 @@ impl Db {
             r#"
             select src_chain, dst_chain, channel_id::text, nonce::text,
                    sender, receiver, amount::text,
-                   transfer_initiated_block_number, transfer_initiated_block_hash,
-                   transfer_executed_on_dst_block_number, transfer_executed_on_dst_block_hash,
-                   transfer_acknowledged_on_src_block_number, transfer_acknowledged_on_src_block_hash,
+                   transfer_initiated_block_number, transfer_initiated_block_hash, transfer_initiated_on_src_at,
+                   transfer_executed_on_dst_block_number, transfer_executed_on_dst_block_hash, transfer_executed_on_dst_at,
+                   transfer_acknowledged_on_src_block_number, transfer_acknowledged_on_src_block_hash, transfer_acknowledged_on_src_at,
                    transfer_successful from indexer.xdm_transfers
-            where sender = $1 or receiver = $1
+            where sender = $1 or receiver = $1 order by transfer_initiated_on_src_at desc 
         "#,
         )
         .bind(address)
@@ -382,6 +409,7 @@ mod tests {
     use crate::storage::Db;
     use crate::types::{ChainId, DomainId};
     use crate::xdm::extract_xdm_events_for_block;
+    use chrono::DateTime;
     use pgtemp::{PgTempDB, PgTempDBBuilder};
     use shared::subspace::{HashAndNumber, Subspace};
     use sp_core::crypto::{Ss58AddressFormat, set_default_ss58_version};
@@ -453,8 +481,10 @@ mod tests {
             number: block_ext.number,
             hash: block_ext.hash,
         };
+        let block_time =
+            DateTime::from_timestamp_millis(block_ext.timestamp().await.unwrap() as i64).unwrap();
         db.db
-            .store_events(&ChainId::Consensus, block, events)
+            .store_events(&ChainId::Consensus, block, block_time, events)
             .await
             .unwrap();
     }
@@ -479,8 +509,10 @@ mod tests {
             number: block_ext.number,
             hash: block_ext.hash,
         };
+        let block_time =
+            DateTime::from_timestamp_millis(block_ext.timestamp().await.unwrap() as i64).unwrap();
         db.db
-            .store_events(&ChainId::Consensus, block, events)
+            .store_events(&ChainId::Consensus, block, block_time, events)
             .await
             .unwrap();
     }
@@ -505,8 +537,10 @@ mod tests {
             number: block_ext.number,
             hash: block_ext.hash,
         };
+        let block_time =
+            DateTime::from_timestamp_millis(block_ext.timestamp().await.unwrap() as i64).unwrap();
         db.db
-            .store_events(&ChainId::Consensus, block, events)
+            .store_events(&ChainId::Consensus, block, block_time, events)
             .await
             .unwrap();
     }
@@ -531,8 +565,10 @@ mod tests {
             number: block_ext.number,
             hash: block_ext.hash,
         };
+        let block_time =
+            DateTime::from_timestamp_millis(block_ext.timestamp().await.unwrap() as i64).unwrap();
         db.db
-            .store_events(&ChainId::Consensus, block, events)
+            .store_events(&ChainId::Consensus, block, block_time, events)
             .await
             .unwrap();
     }
@@ -558,8 +594,10 @@ mod tests {
             number: block_ext.number,
             hash: block_ext.hash,
         };
+        let block_time =
+            DateTime::from_timestamp_millis(block_ext.timestamp().await.unwrap() as i64).unwrap();
         db.db
-            .store_events(&ChainId::Domain(DomainId(0)), block, events)
+            .store_events(&ChainId::Domain(DomainId(0)), block, block_time, events)
             .await
             .unwrap();
     }
@@ -584,8 +622,10 @@ mod tests {
             number: block_ext.number,
             hash: block_ext.hash,
         };
+        let block_time =
+            DateTime::from_timestamp_millis(block_ext.timestamp().await.unwrap() as i64).unwrap();
         db.db
-            .store_events(&ChainId::Domain(DomainId(0)), block, events)
+            .store_events(&ChainId::Domain(DomainId(0)), block, block_time, events)
             .await
             .unwrap();
     }
