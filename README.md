@@ -1,127 +1,70 @@
-# Subspace Chain Alerts
+# Subspace Chain Pulse
 
-Important event alerts for Subspace blockchains.
+Blockchain monitoring, alerting, and cross-domain message (XDM) transfer indexing for Subspace networks.
 
 ## Quick Start
 
-To get up and running quickly:
+### Alerter
 
 - Save the Slack token to a file named `slack-secret`
 - Restrict permissions (Unix): `chmod 400 slack-secret`
-- `docker run --mount type=bind,source=/path/to/slack-secret,target=/slack-secret,readonly ghcr.io/autonomys/chain-alerter [--production]`
+- `docker run --mount type=bind,source=/path/to/slack-secret,target=/slack-secret,readonly ghcr.io/autonomys/chain-alerter --rpc-url wss://rpc.mainnet.autonomys.xyz/ws --slack-bot-name "My Bot" --slack-channel-name chain-alerts`
 
-## Status: Proof of Concept
+### Indexer
 
-- This repository is a minimum viable product.
-- Interfaces, configuration, and behavior may change without notice.
-- Hardcoded settings are used for speed of iteration (Slack channel, wallet addresses, thresholds, etc.).
+Requires a PostgreSQL instance:
 
-## What it does currently
-
-- Connects to Subspace nodes over WebSocket (`ws://127.0.0.1:9944` by default).
-- Subscribes to notifications for best blocks (and all blocks across all nodes for fork detection).
-- Keeps runtime metadata up to date for each node via a background updater.
-- Detects block gaps and forks, filling in missing blocks as needed.
-- After filling in gaps and rationalising forks, runs alert detection on the best fork.
-- Posts applicable alerts to a Slack channel, with links to [subscan.io](https://autonomys.subscan.io)
-
-### Known issues
-
-- [Subscan.io](https://autonomys.subscan.io/block) shows blocks as "finalized" when they are 6 blocks behind the best tip. This is not the same as the Subspace network "finalized" status.
-  - Block data should not be trusted until the block is shown as "finalized" on Subscan.
-- Subscan only indexes the best chain, and [deletes blocks](https://github.com/subscan-explorer/subscan-issue-tracker/issues/156#issuecomment-3355554868)
-  that are reorged away from.
-  - Links to blocks that have been reorged away from will give a "No related data found" error on Subscan.
-  - If "finalized" blocks are likely to have changed, the alerter will issue a reorg alert, and any open Subscan links should be refreshed.
-
-### How fork detection works
-
-Blocks can be received in any order, and block notifications can be skipped, particularly during bulk syncing.
-
-When a block is received from the all blocks subscription on the primary node:
-
-1. it is checked to see if it is the best block (only if it is a recent block)
-  a. backwards reorgs are rare and unlikely due to the fork rules, so we can skip this check for most blocks
-
-For all other subscriptions:
-
-1. The block is either assumed to be the best block (best blocks subscription on the primary node) or assumed not to be (all blocks on secondary nodes)
-  a. a separate block stall alerter is run for each connected node
-2. the fork monitor connects the block to the existing chain, fetching missing parent blocks as needed
-  a. if there are too many missing blocks, the block is treated as a disconnected new fork
-3. new and missing blocks on the best fork are checked for alerts
-  a. the side chain alerts also check for side forks on all connected nodes
-
-### Core block operations
-
-A new block can:
-
-- start a new chain (the first block always starts a new chain)
-- extend an existing chain tip
-- fork from a block behind a chain tip
-
-A reorg happens when:
-
-- a best block forks behind any chain tip
-- a best block extends a chain tip, and the previous best block was on a different fork
-  - if blocks are skipped, the previous best block can be an ancestor of the new best block, but not its parent
-
-### Which blocks are checked for alerts?
-
-All blocks on a best fork are checked for alerts, including blocks missed by subscriptions.
-If there is a reorg, all unchecked blocks on the new best fork are checked for alerts.
-
-For example:
-
-Here is a typical chain fork:
-
-```text
-A - F - C1 - D1
-      \ C2 - D2 - E2
+```bash
+cargo run -p indexer -- --db-uri postgres://user:pass@localhost:5432/indexer
 ```
 
-If the local node receives all the blocks up to D1 first, then all the blocks up to E2, it will reorg from D1 to E2.
-The chain fork monitor will check the blocks in this order:
-`A - F - C1 - D1` then `C2 - D2 - E2`.
-Some alerts check against the parent block, which is provided for each listed block.
-Other alerts check a larger context, and need to manage it carefully during reorgs.
+## What it does
 
-It is possible (but unlikely) for the chain to reorg from a higher to a lower height,
-if the solution range after an era transition is significantly different on the two forks.
+### Alerter
+
+Connects to a Subspace node via WebSocket and monitors for:
+- **Block events**: known account transfers (deposits, withdrawals), domain upgrades, fraud proofs, operator slashing/offline, sudo calls, runtime code updates
+- **Chain stalls and reorgs**: detects when blocks stop being produced or when forks exceed a depth threshold
+- **Slot timing**: monitors per-slot and average slot duration via Proof-of-Time from the P2P network
+- **Uptime**: optional Uptime Kuma health check pushes
+
+Alerts are posted to a Slack channel. The network (Mainnet, Chronos Testnet, etc.) is auto-detected from node metadata, and the corresponding accounts and bootnodes are loaded from `alerter/networks.toml`.
+
+### Indexer
+
+REST API for querying cross-domain message (XDM) transfers, backed by PostgreSQL:
+- `GET /health` — last processed block per chain
+- `GET /v1/xdm/transfers/{address}` — XDM transfers for an address
+- `GET /v1/xdm/recent` — recent XDM transfers (configurable limit)
+
+Processes blocks in parallel from both the consensus chain and Auto-EVM domain.
+
+## How block tracking and reorg detection works
+
+The `shared/subspace.rs` module (`Subspace::listen_for_all_blocks`) manages block tracking and reorg detection. It subscribes to all imported blocks and maintains a header metadata cache (`HeadersMetadataCache`) of the last 100 blocks.
+
+### Block processing flow
+
+1. **Subscribe** to all blocks via `subscribe_all()`. On startup, load the last `CACHE_HEADER_DEPTH` (100) canonical block headers into the cache.
+2. For each received block:
+   a. Add its header to the cache.
+   b. Check if it is the **canonical block** at that height by querying the node RPC (`is_canonical_block`). Fork blocks are logged and skipped.
+   c. Compute the **tree route** from the previous best block to the new best block using `sp_blockchain::tree_route`, which walks the cached headers to find enacted (new best path) and retracted (old best path) blocks relative to a common ancestor.
+   d. If headers are missing from the cache during tree route computation, fetch them from RPC and retry (`recursive_tree_route`).
+3. **Broadcast** the enacted blocks as `BlocksExt` via a `tokio::broadcast` channel. If blocks were retracted, include `ReorgData` (enacted blocks, retracted blocks, common ancestor).
+4. After broadcasting, **prune** cached headers older than 100 blocks behind the current best.
+
+### How consumers handle reorgs
+
+The `stall_and_reorg` alerter listens on the broadcast stream and:
+- If `BlocksExt` contains `ReorgData` with retracted blocks exceeding the configured `--reorg-depth-threshold` (default 6), it sends a reorg alert to Slack.
+- If no blocks arrive within `--non-block-import-threshold` (default 60s), it sends a chain stall alert. When blocks resume, it sends a recovery alert.
+
+### RPC reconnection
+
+If the block subscription closes due to an RPC error, the listener automatically re-subscribes and reloads the header cache from the new connection.
 
 For details of the fork choice algorithm, see [the subspace protocol specification](https://subspace.github.io/protocol-specs/docs/decex/workflow#fork-choice-rule).
-
-## Alert De-duplication
-
-### By Alert Kind
-
-Alerts about the same extrinsic or event are deduplicated, using this priority order:
-
-- sudo/sudid
-- large balance transfer
-- force balance transfer
-- important address transfer
-- important address (any other extrinsic or event)
-
-Other alert kinds are not de-duplicated, because they are unlikely to report the same issue.
-
-### Over Time
-
-Some alerts are de-duplicated by only issuing an alert when the status changes:
-
-- BlockStall/Resume
-  - BlockReceiveResumed also takes priority over BlockChainTimeGap, because it contains the chain gap anyway
-- SlotTime High/Low
-- Farmer Increase/Decrease
-
-### By Severity
-
-Fork and side chain alerts are only issued at the threshold, and when the fork length is a multiple of 10 blocks.
-
-### Between Servers
-
-Alerts are de-duplicated between servers by connecting multiple servers to the same alerter instance.
-Some alerts are only issued if they happen on the primary RPC server.
 
 ## Security notes
 
@@ -133,86 +76,108 @@ Some alerts are only issued if they happen on the primary RPC server.
 ### Managing the Slack Bot
 
 The Slack bot has permission to read and post in channels it is invited into by Slack users.
-As of November 2025, this is just the chain-alerts and test channels.
 
 The Slack bot can be managed via your Slack login on [the Slack apps portal](https://api.slack.com/apps):
 
 - The Autonomys Slack team ID is T03LJ85UR5G and the App ID is A09956363PY (these are not secrets)
 - Slack bot tokens can be created and revoked on the [Install App](https://api.slack.com/apps/A09956363PY/install-on-team) screen, and the bot's permissions can be changed
-- Bot tokens look like `xoxb-(numbers)-(numbers)-(base64)` as of November 2025
-
-## Limitations (PoC)
-
-- Hardcoded Slack channel, workspace ID, and thresholds.
-- Minimal decoding/validation for extrinsics and events; fields are parsed best-effort.
-- Minimal stateful aggregation (e.g., summing multiple related transfers).
-- Alerts are partly de-duplicated, but some duplicates might still happen (this is safer than accidentally ignoring important alerts).
-- No alert deduplication between multiple alerter instances.
-- Limited CLI configuration.
-- No persistent storage, no metrics, no dashboards.
-- Basic error handling: logs warnings on transient decode/metadata mismatches and continues.
-- Limited testing, some tests are still manual.
+- Bot tokens look like `xoxb-(numbers)-(numbers)-(base64)`
 
 ## Getting started
 
-1. Prerequisites
+### Prerequisites
 
-   - Rust (edition 2024 compatible)
-   - A Slack bot token with permission to post to the target channel in the Autonomys workspace
-   - A running Subspace node (a local non-archival node is fine)
+- Rust nightly (pinned in `rust-toolchain.toml`)
+- A Slack bot token with permission to post to the target channel in the Autonomys workspace (for alerter)
+- PostgreSQL (for indexer)
+- A running Subspace node (a local non-archival node is fine for the alerter)
 
-2. Optional: Prepare Slack secret file
+### Prepare Slack secret file (alerter)
 
-   - Get the current Slack "bot token" from [Install App on the Slack apps portal](https://api.slack.com/apps/A09956363PY/install-on-team)
-   - Save it to a file named `slack-secret` in the repository root
-   - Restrict permissions (Unix):
-     - `chmod 400 slack-secret` (or `chmod 600 slack-secret`)
+1. Get the current Slack "bot token" from [Install App on the Slack apps portal](https://api.slack.com/apps/A09956363PY/install-on-team)
+2. Save it to a file named `slack-secret`
+3. Restrict permissions (Unix): `chmod 400 slack-secret` (or `chmod 600 slack-secret`)
 
-3. Optional: Run a local Subspace node
+### Build and run the alerter
 
-   - This is the most efficient way to run an instance, because it gives low latency for the block subscriptions, best blocks checks, extrinsics, and events retrieval.
-   - Follow the Subspace monorepo docs to build/run a local node, or run a dev node suitable for testing.
-     See the Subspace reference implementation for details: [Subspace monorepo](https://github.com/autonomys/subspace).
+```bash
+cargo run -p alerter -- \
+  --rpc-url wss://rpc.mainnet.autonomys.xyz/ws \
+  --slack-bot-name "My Bot" \
+  --slack-channel-name chain-alerts \
+  --slack-secret-path ./slack-secret
+```
 
-4. Build and run
-   - `cargo run -- --name "My Test Bot" --icon "warning" --node-rpc-url wss://rpc.mainnet.autonomys.xyz/ws`
-     - to use multiple nodes, supply `--node-rpc-url` multiple times
-       - public node URLs are [listed in subspace.rs](https://github.com/autonomys/subspace-chain-alerts/blob/ac33ed7d200a1fdc3b92c1919f7b9cfacfba37c6/chain-alerter/src/subspace.rs#L43-L49)
-     - `--uptime-kuma-url` sends an uptime kuma status containing the latest block height as the `ping`
-       - if there are multiple uptime kuma URLs, each status is sent using a separate task
-     - `--production` will send alerts to the production channel (except for startup alerts, which always go to the test channel)
-     - `--slack=false` will disable Slack message posting entirely, and just log alerts to the terminal.
-   - Testing options:
-     - `--alert-limit=5` will exit after 5 alerts have been posted, including the startup alert.
-     - `--test-startup` will always exit after the startup alert, even if other alerts fired during the initial context load.
-   - After context blocks are loaded, you should see a Slack message in `#chain-alerts-test` summarizing connection and block info.
-   - All arguments are optional. The default node is `localhost`, and the default icon is the instance external IP address country flag (looked up via an online GeoIP service, which can be wrong).
-   - `RUST_LOG` can be used to filter logs, see:
-     <https://docs.rs/tracing-subscriber/0.3.19/tracing_subscriber/filter/struct.EnvFilter.html#directives>
+#### Alerter CLI arguments
+
+| Argument | Required | Default | Description |
+|---|---|---|---|
+| `--rpc-url` | Yes | — | Node WebSocket RPC endpoint |
+| `--network-config-path` | No | `/networks.toml` | Path to TOML file with accounts and bootnodes |
+| `--slack-bot-name` | Yes | — | Bot display name in Slack |
+| `--slack-channel-name` | Yes | — | Target Slack channel |
+| `--slack-secret-path` | No | `/slack-secret` | Path to file containing bot token |
+| `--slack-bot-icon` | No | `robot_face` | Bot emoji icon |
+| `--slack-team-id` | No | `T03LJ85UR5G` | Slack workspace ID |
+| `--uptimekuma-url` | No | — | Uptime Kuma push URL |
+| `--uptimekuma-interval` | No | `60s` | Health check push frequency |
+| `--non-block-import-threshold` | No | `60s` | Alert after no blocks for this duration |
+| `--reorg-depth-threshold` | No | `6` | Reorg depth to trigger alert |
+| `--per-slot-threshold` | No | `1.2s` | Max acceptable per-slot duration |
+| `--avg-slot-threshold` | No | `1.1s` | Max acceptable average slot duration |
+
+### Build and run the indexer
+
+```bash
+cargo run -p indexer -- \
+  --db-uri postgres://indexer:password@localhost:5432/indexer?sslmode=disable
+```
+
+#### Indexer CLI arguments
+
+| Argument | Required | Default | Description |
+|---|---|---|---|
+| `--migrations-path` | No | `./indexer/migrations` | Path to SQL migration files |
+| `--consensus-rpc` | No | `wss://rpc.mainnet.autonomys.xyz/ws` | Consensus chain RPC |
+| `--auto-evm-rpc` | No | `wss://auto-evm.mainnet.autonomys.xyz/ws` | Auto-EVM domain RPC |
+| `--db-uri` | No | `postgres://indexer:password@localhost:5434/indexer?sslmode=disable` | PostgreSQL connection string |
+| `--process-blocks-in-parallel` | No | `5000` | Number of blocks to process concurrently |
+
+All indexer arguments can also be set via environment variables (uppercase, e.g. `DB_URI`, `CONSENSUS_RPC`).
+
+### Logging
+
+`RUST_LOG` can be used to filter logs. See [EnvFilter docs](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html#directives).
+
+### Running a local Subspace node (optional)
+
+Running a local node gives low latency for block subscriptions, best block checks, and event retrieval. See the [Subspace monorepo](https://github.com/autonomys/subspace) for build/run instructions.
 
 ## Project structure
 
-- Crate `chain-alerter`
-  - `chain_fork_monitor.rs`: reassembles received blocks into a coherent set of forks
-  - `alerts.rs`: checks for alerts in each block and extrinsic
-    - `accounts.rs`: address-based alerts and address context for all alerts
-    - `subscan.rs`: links to Subscan.io for blocks, extrinsics, and events
-    - `transfer.rs`: amount transfer alerts and amount context for all alerts
-    - `farming_monitor.rs`: unique farmer vote count monitoring
-    - `slot_time_monitor.rs`: slot production rate monitoring for slot alerts
-  - `subspace.rs`: Uses `subxt` and `scale-value` for chain interaction
-  - `slack.rs`: Uses `slack-morphism` to send messages to Slack
-  - `main.rs`: main process logic and run loop
-    - Depends on `subspace-process` for process handling utility functions
-  - `../test_utils.rs`: test support for alerts and subsystems.
-  - `../tests.rs`: tests for alerts and subsystems.
-- `docker`: Docker image definitions
-- `scripts`: shell scripts used for local or CI testing, or developer tools
-  - `bump-versions.sh`: developer script to bump the crate version
-  - `check-startup.sh`: CI/testing script to test that alerter startup works
-  - `find-unused-deps.sh`: CI script that finds unused dependencies
+- **`alerter/`** — Chain event alerting service
+  - `main.rs`: multi-task orchestrator using `tokio::JoinSet`
+  - `cli.rs`: command-line configuration (clap)
+  - `events.rs`: block event monitoring (transfers, domain events, fraud proofs, operator events, sudo, code updates)
+  - `stall_and_reorg.rs`: chain stall detection and reorg monitoring
+  - `slots.rs`: slot timing monitoring via Proof-of-Time
+  - `p2p_network.rs`: libp2p peer discovery and PoT stream collection
+  - `slack.rs`: Slack API integration with secure token handling
+  - `uptime.rs`: Uptime Kuma health check pusher
+  - `event_types.rs`: alert event type definitions
+  - `md_format.rs`: markdown formatting for alert messages
+  - `networks.toml`: per-network configuration (known accounts, bootstrap nodes)
+- **`indexer/`** — XDM transfer indexer and REST API
+  - `main.rs`: Actix-web server + dual-chain block processors
+  - `api.rs`: REST endpoints (health, XDM transfers)
+  - `xdm.rs`: XDM event processing and indexing
+  - `storage.rs`: PostgreSQL database layer (sqlx)
+  - `types.rs`: domain models (ChainId, transfer types)
+  - `migrations/`: SQL migration files
+- **`shared/`** — Shared blockchain client utilities
+  - `subspace.rs`: subxt-based chain interaction (block streaming, metadata, events)
+- **`docker/`** — Multi-platform Dockerfiles (`alerter.Dockerfile`, `indexer.Dockerfile`)
 
 ### References
 
 - Subspace Protocol reference implementation (node): [autonomys/subspace](https://github.com/autonomys/subspace)
-- Tracking discussion for alerting PoC scope and follow-ups: [Issue #3](https://github.com/autonomys/subspace-chain-alerts/issues/3)
