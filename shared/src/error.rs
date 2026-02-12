@@ -8,6 +8,8 @@ pub enum Error {
     Subxt(Box<subxt::Error>),
     #[error("Block missing from backend")]
     MissingBlock,
+    #[error("Block subscription closed")]
+    SubscriptionClosed,
     #[error("RPC error: {0}")]
     Rpc(#[from] subxt_rpcs::Error),
     #[error("Block Hash missing from Cache")]
