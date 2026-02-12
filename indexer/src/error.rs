@@ -1,9 +1,11 @@
-use actix_web::ResponseError;
+use actix_web::http::StatusCode;
+use actix_web::{HttpResponse, ResponseError};
 use sqlx::migrate::MigrateError;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::task::JoinError;
+use tracing::error;
 
-/// Overarching Error type for Alerter.
+/// Overarching Error type for Indexer.
 #[derive(thiserror::Error, Debug)]
 pub(crate) enum Error {
     #[error("Config error: {0}")]
@@ -28,4 +30,13 @@ impl From<subxt::Error> for Error {
     }
 }
 
-impl ResponseError for Error {}
+impl ResponseError for Error {
+    fn status_code(&self) -> StatusCode {
+        StatusCode::INTERNAL_SERVER_ERROR
+    }
+
+    fn error_response(&self) -> HttpResponse {
+        error!("API error: {self}");
+        HttpResponse::build(self.status_code()).body("internal server error")
+    }
+}

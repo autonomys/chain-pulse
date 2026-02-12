@@ -223,7 +223,7 @@ impl Subspace {
                 .map_err(|err| Error::Rpc(subxt_rpcs::Error::Client(Box::new(err))))?,
         );
         let rpc = Arc::new(LegacyRpcMethods::<SubstrateConfig>::new(rpc_client.clone()));
-        let client = Arc::new(SubspaceClient::from_url(url).await?);
+        let client = Arc::new(SubspaceClient::from_rpc_client(rpc_client).await?);
         let (sink, stream) = channel(100);
         Ok(Self {
             rpc,
@@ -292,9 +292,9 @@ impl Subspace {
         let mut header_metadata = HeadersMetadataCache::default();
         loop {
             let mut sub = blocks_client.subscribe_all().await?.fuse();
-            let current_best_block =
-                self.load_header_metadata_cache(&mut sub, &mut header_metadata)
-                    .await;
+            let current_best_block = self
+                .load_header_metadata_cache(&mut sub, &mut header_metadata)
+                .await;
             let res = match current_best_block {
                 Ok(mut current_best_block) => {
                     self.listen_for_blocks(&mut header_metadata, &mut current_best_block, sub)
@@ -363,7 +363,10 @@ impl Subspace {
 
             if enacted.is_empty() {
                 // should not happen where enact nothing but retract blocks
-                warn!("Unexpected state: no enacted blocks but {} retracted blocks", retracted.len());
+                warn!(
+                    "Unexpected state: no enacted blocks but {} retracted blocks",
+                    retracted.len()
+                );
                 continue;
             }
 

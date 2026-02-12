@@ -415,6 +415,7 @@ impl Db {
                    transfer_executed_on_dst_block_number, transfer_executed_on_dst_block_hash, transfer_executed_on_dst_at,
                    transfer_acknowledged_on_src_block_number, transfer_acknowledged_on_src_block_hash, transfer_acknowledged_on_src_at,
                    transfer_successful from indexer.xdm_transfers
+            where transfer_initiated_on_src_at is not null
             order by transfer_initiated_on_src_at desc limit $1
         "#,
         )
