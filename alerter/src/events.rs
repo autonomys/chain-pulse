@@ -63,7 +63,7 @@ pub(crate) async fn watch_events(
             );
             events.into_iter().for_each(|event| {
                 if let Err(err) = alert_sink.send(Alert::Event(event)) {
-                    error!("⛔️failed to send Block production recovery alert: {err}");
+                    error!("⛔️failed to send block event alert: {err}");
                 }
             })
         }

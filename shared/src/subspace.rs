@@ -127,7 +127,7 @@ impl BlockExt {
             .get(&self.number)
             .cloned()
             .ok_or(Error::Storage(format!(
-                "Missing slot for block: {})",
+                "Missing slot for block: {}",
                 self.number
             )))
     }
@@ -223,7 +223,7 @@ impl Subspace {
                 .map_err(|err| Error::Rpc(subxt_rpcs::Error::Client(Box::new(err))))?,
         );
         let rpc = Arc::new(LegacyRpcMethods::<SubstrateConfig>::new(rpc_client.clone()));
-        let client = Arc::new(SubspaceClient::from_url(url).await?);
+        let client = Arc::new(SubspaceClient::from_rpc_client(rpc_client).await?);
         let (sink, stream) = channel(100);
         Ok(Self {
             rpc,
@@ -270,7 +270,7 @@ impl Subspace {
         let token_decimals = system_properties
             .get("tokenDecimals")
             .and_then(|v| v.as_u64())
-            .ok_or(Error::Config("Failed to get Token Symbol".to_string()))?
+            .ok_or(Error::Config("Failed to get Token Decimals".to_string()))?
             as u8;
 
         Ok(NetworkDetails {
@@ -292,20 +292,29 @@ impl Subspace {
         let mut header_metadata = HeadersMetadataCache::default();
         loop {
             let mut sub = blocks_client.subscribe_all().await?.fuse();
-            let mut current_best_block = self
+            let current_best_block = self
                 .load_header_metadata_cache(&mut sub, &mut header_metadata)
-                .await?;
-            let res = self
-                .listen_for_blocks(&mut header_metadata, &mut current_best_block, sub)
                 .await;
+            let res = match current_best_block {
+                Ok(mut current_best_block) => {
+                    self.listen_for_blocks(&mut header_metadata, &mut current_best_block, sub)
+                        .await
+                }
+                Err(err) => Err(err),
+            };
             error!("Block subscription closed: {res:?}");
-            // if disconnected, reinitiate for reconnection
-            if let Err(Error::Rpc(_)) = res {
-                warn!("RPC connection disconnected. Reinitiating...");
-                continue;
+            // if disconnected or subscription ended, reinitiate for reconnection
+            match &res {
+                Err(Error::Rpc(_)) => {
+                    warn!("RPC connection disconnected. Reinitiating...");
+                    continue;
+                }
+                Err(Error::SubscriptionClosed) => {
+                    warn!("Block subscription closed. Reinitiating...");
+                    continue;
+                }
+                _ => return res,
             }
-
-            return res;
         }
     }
 
@@ -316,7 +325,7 @@ impl Subspace {
         mut sub: SubxtBlockStream,
     ) -> Result<(), Error> {
         loop {
-            let block = sub.next().await.ok_or(Error::MissingBlock)??;
+            let block = sub.next().await.ok_or(Error::SubscriptionClosed)??;
             let block_hash = block.hash();
             let block_number = block.number();
 
@@ -354,6 +363,10 @@ impl Subspace {
 
             if enacted.is_empty() {
                 // should not happen where enact nothing but retract blocks
+                warn!(
+                    "Unexpected state: no enacted blocks but {} retracted blocks",
+                    retracted.len()
+                );
                 continue;
             }
 
@@ -433,7 +446,7 @@ impl Subspace {
     ) -> Result<HashAndNumber, Error> {
         let mut latest_block_hash = None;
         while latest_block_hash.is_none() {
-            let block = sub.next().await.ok_or(Error::MissingBlock)??;
+            let block = sub.next().await.ok_or(Error::SubscriptionClosed)??;
             let hash = block.hash();
             let block_number = block.number();
             if self.is_canonical_block(block_number, hash).await? {
@@ -549,7 +562,7 @@ impl HeadersMetadataCache {
     fn remove_header_until(&mut self, number: BlockNumber) {
         let mut to_remove = number;
         while let Some(hashes) = self.block_number_hashes.remove(&to_remove) {
-            debug!("Removing header from cache: {number}");
+            debug!("Removing header from cache: {to_remove}");
             hashes.into_iter().for_each(|hash| {
                 self.block_header_data.remove(&hash);
             });

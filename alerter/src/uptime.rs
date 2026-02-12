@@ -22,12 +22,18 @@ pub(crate) async fn push_uptime_status(url: String, every: Duration) -> Result<(
 
         debug!("Pushing uptime status...");
 
-        let formatted_url = format!("{url}?status=up&msg=Ok&ping={}", every.as_millis());
-        let res = client.get(&formatted_url).send().await?;
-        if res.status().is_success() {
-            debug!("Pushed uptime status.")
-        } else {
-            error!("Failed to push uptime status: {}", res.status());
+        let formatted_url = format!("{url}?status=up&msg=Ok");
+        match client.get(&formatted_url).send().await {
+            Ok(res) => {
+                if res.status().is_success() {
+                    debug!("Pushed uptime status.")
+                } else {
+                    error!("Failed to push uptime status: {}", res.status());
+                }
+            }
+            Err(err) => {
+                error!("Failed to push uptime status: {err}");
+            }
         }
     }
 }
