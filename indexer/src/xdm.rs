@@ -1,10 +1,11 @@
 use crate::error::Error;
-use crate::storage::Db;
-use crate::types::{
-    ChainId, DomainId, Event, IncomingTransferSuccessful, OutgoingTransferFailed,
-    OutgoingTransferInitiated, OutgoingTransferInitiatedWithTransfer, OutgoingTransferSuccessful,
-    Transfer,
+use crate::events::{
+    Event, IncomingTransferSuccessful, OutgoingTransferFailed, OutgoingTransferInitiated,
+    OutgoingTransferInitiatedWithTransfer, OutgoingTransferSuccessful,
 };
+use crate::processor::{self, BlockProcessor};
+use crate::storage::Db;
+use crate::types::{ChainId, DomainId, Transfer};
 use futures_util::{StreamExt, TryStreamExt, stream};
 use shared::subspace::{BlockExt, BlockNumber, BlocksStream, HashAndNumber, SubspaceBlockProvider};
 use sqlx::types::chrono::DateTime;
@@ -13,83 +14,59 @@ use subxt::events::{EventDetails, StaticEvent};
 use subxt::storage::StaticStorageKey;
 use tracing::info;
 
-const CHECKPOINT_PROCESSED_BLOCK: u32 = 100;
-
-pub(crate) fn get_processor_key(chain_id: &ChainId) -> String {
+pub(crate) fn get_xdm_processor_key(chain_id: &ChainId) -> String {
     format!("xdm_processor_{chain_id}")
+}
+
+pub(crate) struct XdmProcessor {
+    chain: ChainId,
+    checkpoint_key: String,
+}
+
+impl XdmProcessor {
+    pub(crate) fn new(chain: ChainId) -> Self {
+        let checkpoint_key = get_xdm_processor_key(&chain);
+        Self {
+            chain,
+            checkpoint_key,
+        }
+    }
+}
+
+impl BlockProcessor for XdmProcessor {
+    async fn process_block(
+        &self,
+        block_number: BlockNumber,
+        db: &Db,
+        block_provider: &SubspaceBlockProvider,
+    ) -> Result<(), Error> {
+        index_events_for_block(&self.chain, block_number, db, block_provider).await
+    }
+
+    fn checkpoint_key(&self) -> &str {
+        &self.checkpoint_key
+    }
+
+    fn name(&self) -> &str {
+        "XDM"
+    }
 }
 
 pub(crate) async fn index_xdm(
     chain: ChainId,
-    mut stream: BlocksStream,
+    stream: BlocksStream,
     block_provider: SubspaceBlockProvider,
     db: Db,
     process_blocks_in_parallel: u32,
 ) -> Result<(), Error> {
-    let processor_key = get_processor_key(&chain);
-    loop {
-        let blocks_ext = stream.recv().await?;
-        let last_processed_block_number = db
-            .get_last_processed_block(&processor_key)
-            .await
-            .unwrap_or(0);
-
-        // if there is only one imported block, then
-        // chain extended by one block, so index from last_processed + 1 ..=new_block
-        let (from, to) = if blocks_ext.blocks.len() == 1 {
-            (
-                last_processed_block_number + 1,
-                blocks_ext
-                    .blocks
-                    .first()
-                    .expect("must contain at least one block")
-                    .number,
-            )
-        } else {
-            let blocks = blocks_ext
-                .blocks
-                .iter()
-                .map(|b| b.number)
-                .collect::<Vec<_>>();
-            let min = *blocks
-                .iter()
-                .min()
-                .expect("should have more than one block");
-            let max = *blocks
-                .iter()
-                .max()
-                .expect("should have more than one block");
-
-            (min.min(last_processed_block_number + 1), max)
-        };
-
-        if from > to {
-            continue;
-        }
-
-        info!("Indexing blocks from[{from}] to to[{to}]...");
-        let mut s = stream::iter((from..=to).map(|block| {
-            let chain = &chain;
-            let db = &db;
-            let block_provider = &block_provider;
-            async move {
-                index_events_for_block(chain, block, db, block_provider)
-                    .await
-                    .map(|_| block)
-            }
-        }))
-        .buffered(process_blocks_in_parallel as usize);
-
-        while let Some(block) = s.try_next().await? {
-            if block.is_multiple_of(CHECKPOINT_PROCESSED_BLOCK) {
-                info!("Indexed block: {}", block);
-                db.set_last_processed_block(&processor_key, block).await?;
-            }
-        }
-
-        info!("Indexed block: {}", to);
-        db.set_last_processed_block(&processor_key, to).await?;
-    }
+    processor::run_processor(
+        XdmProcessor::new(chain),
+        stream,
+        block_provider,
+        db,
+        process_blocks_in_parallel,
+    )
+    .await
 }
 
 async fn index_events_for_block(
@@ -176,11 +153,11 @@ fn as_events<E: StaticEvent + Into<Event>>(
 
 #[cfg(test)]
 mod tests {
-    use crate::types::{
-        ChainId, DomainId, Event, IncomingTransferSuccessful, Location, MultiAccountId,
-        OutgoingTransferFailed, OutgoingTransferInitiatedWithTransfer, OutgoingTransferSuccessful,
-        Transfer,
+    use crate::events::{
+        Event, IncomingTransferSuccessful, OutgoingTransferFailed,
+        OutgoingTransferInitiatedWithTransfer, OutgoingTransferSuccessful,
     };
+    use crate::types::{ChainId, DomainId, Location, MultiAccountId, Transfer};
     use crate::xdm::extract_xdm_events_for_block;
     use hex_literal::hex;
     use scale_decode::ext::primitive_types::U256;

@@ -59,6 +59,15 @@ impl SubspaceBlockProvider {
         self.block_ext_at_hash(block_hash).await
     }
 
+    pub async fn block_ext_latest(&self) -> Result<BlockExt, Error> {
+        let hash = self
+            .rpc
+            .chain_get_block_hash(None)
+            .await?
+            .ok_or(Error::MissingBlockHeaderForNumber(0))?;
+        self.block_ext_at_hash(hash).await
+    }
+
     pub async fn block_ext_at_hash(&self, block_hash: BlockHash) -> Result<BlockExt, Error> {
         let header = self
             .rpc
@@ -110,6 +119,27 @@ impl BlockExt {
             .await?
             .map(|encoded| T::decode(&mut encoded.encoded()).map_err(Error::Scale))
             .ok_or(Error::Storage(format!("{pallet}.{storage}")))?
+    }
+
+    /// Iterates all entries in a storage map, returning `(raw_key_bytes, decoded_value)` pairs.
+    ///
+    /// For a map with `Identity` hasher the operator ID is the last 8 bytes of the key.
+    pub async fn iter_storage<T: Decode>(
+        &self,
+        pallet: &str,
+        storage: &str,
+    ) -> Result<Vec<(Vec<u8>, T)>, Error> {
+        use subxt::dynamic::Value;
+        let query = subxt::dynamic::storage(pallet, storage, Vec::<Value>::new());
+        let mut stream = self.client.storage().at(self.hash).iter(query).await?;
+        let mut items = Vec::new();
+        while let Some(kv) = stream.next().await {
+            let kv = kv?;
+            let encoded = kv.value.encoded();
+            let value = T::decode(&mut &encoded[..]).map_err(Error::Scale)?;
+            items.push((kv.key_bytes, value));
+        }
+        Ok(items)
     }
 
     /// Returns block timestamp.
@@ -305,12 +335,19 @@ impl Subspace {
             error!("Block subscription closed: {res:?}");
             // if disconnected or subscription ended, reinitiate for reconnection
             match &res {
-                Err(Error::Rpc(_)) => {
+                Err(Error::Subxt(_)) | Err(Error::Rpc(_)) => {
                     warn!("RPC connection disconnected. Reinitiating...");
                     continue;
                 }
                 Err(Error::SubscriptionClosed) => {
                     warn!("Block subscription closed. Reinitiating...");
+                    continue;
+                }
+                // we reconnect if there was a missing block.
+                // could be due to client has not indexed the details yet.
+                Err(Error::MissingBlockHeaderForNumber(_))
+                | Err(Error::MissingBlockHeaderForHash(_)) => {
+                    warn!("Missing block data. Reinitiating...");
                     continue;
                 }
                 _ => return res,
@@ -411,7 +448,7 @@ impl Subspace {
             .rpc
             .chain_get_block_hash(Some(block_number.into()))
             .await?
-            .ok_or(Error::MissingBlock)?;
+            .ok_or(Error::MissingBlockHeaderForNumber(block_number))?;
         Ok(block_hash == hash)
     }
 
@@ -459,7 +496,7 @@ impl Subspace {
             .rpc
             .chain_get_header(Some(latest_hash))
             .await?
-            .ok_or(Error::MissingBlock)?;
+            .ok_or(Error::MissingBlockHeaderForHash(latest_hash))?;
 
         let cache_start_number = latest_head.number.saturating_sub(CACHE_HEADER_DEPTH);
 
@@ -474,12 +511,12 @@ impl Subspace {
                     .rpc
                     .chain_get_block_hash(Some(number.into()))
                     .await?
-                    .ok_or(Error::MissingBlock)?;
+                    .ok_or(Error::MissingBlockHeaderForNumber(number))?;
                 let header = self
                     .rpc
                     .chain_get_header(Some(block_hash))
                     .await?
-                    .ok_or(Error::MissingBlock)?;
+                    .ok_or(Error::MissingBlockHeaderForHash(block_hash))?;
                 debug!("Block header from RPC {number} - {block_hash}");
                 Ok::<_, Error>(header)
             }),
@@ -513,7 +550,7 @@ impl Subspace {
                         .rpc
                         .chain_get_header(Some(hash))
                         .await?
-                        .ok_or(Error::MissingBlock)?;
+                        .ok_or(Error::MissingBlockHeaderForHash(hash))?;
                     header_metadata.add_header(header);
                     Box::pin(self.recursive_tree_route(header_metadata, from, to)).await
                 }

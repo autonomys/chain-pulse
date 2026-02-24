@@ -10,6 +10,11 @@ use tracing::error;
 pub(crate) enum Error {
     #[error("Config error: {0}")]
     Config(String),
+    #[error("Not found: {0}")]
+    NotFound(String),
+    #[allow(dead_code)]
+    #[error("Bad request: {0}")]
+    BadRequest(String),
     #[error("Subspace error: {0}")]
     Subspace(#[from] shared::error::Error),
     #[error("Io error: {0}")]
@@ -32,11 +37,28 @@ impl From<subxt::Error> for Error {
 
 impl ResponseError for Error {
     fn status_code(&self) -> StatusCode {
-        StatusCode::INTERNAL_SERVER_ERROR
+        match self {
+            Self::NotFound(_) => StatusCode::NOT_FOUND,
+            Self::BadRequest(_) => StatusCode::BAD_REQUEST,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        }
     }
 
     fn error_response(&self) -> HttpResponse {
-        error!("API error: {self}");
-        HttpResponse::build(self.status_code()).body("internal server error")
+        let body = match self {
+            Self::NotFound(msg) => {
+                tracing::warn!("API 404: {msg}");
+                format!("not found: {msg}")
+            }
+            Self::BadRequest(msg) => {
+                tracing::warn!("API 400: {msg}");
+                format!("bad request: {msg}")
+            }
+            other => {
+                error!("API error: {other}");
+                "internal server error".to_string()
+            }
+        };
+        HttpResponse::build(self.status_code()).body(body)
     }
 }

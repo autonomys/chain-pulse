@@ -6,8 +6,6 @@ use subxt::utils::H256;
 pub enum Error {
     #[error("Subxt error: {0}")]
     Subxt(Box<subxt::Error>),
-    #[error("Block missing from backend")]
-    MissingBlock,
     #[error("Block subscription closed")]
     SubscriptionClosed,
     #[error("RPC error: {0}")]
