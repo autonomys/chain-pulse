@@ -3,6 +3,10 @@
 
 mod api;
 mod error;
+mod events;
+mod processor;
+mod rpc_types;
+mod staking;
 mod storage;
 mod types;
 mod xdm;
@@ -37,7 +41,7 @@ pub(crate) struct Cli {
         default_value = "postgres://indexer:password@localhost:5434/indexer?sslmode=disable"
     )]
     db_uri: String,
-    #[clap(long, env, default_value = "5000")]
+    #[clap(long, env, default_value = "1000")]
     process_blocks_in_parallel: u32,
 }
 
@@ -101,6 +105,7 @@ async fn main() -> Result<(), Error> {
             .app_data(web::Data::new(state))
             .configure(api::health_config)
             .configure(api::xdm_config)
+            .configure(api::staking_config)
     })
     .keep_alive(Duration::from_secs(30))
     .bind(("0.0.0.0", 8080))?
@@ -141,10 +146,13 @@ async fn start_tasks(
             .instrument(span.clone()),
     );
 
+    let is_consensus = matches!(chain, ChainId::Consensus);
+    let block_provider = subspace.block_provider();
+
     join_set.spawn(
         {
             let stream = subspace.blocks_stream();
-            let block_provider = subspace.block_provider();
+            let block_provider = block_provider.clone();
             let db = db.clone();
             async move {
                 xdm::index_xdm(
@@ -159,6 +167,24 @@ async fn start_tasks(
         }
         .instrument(span.clone()),
     );
+
+    // Spawn the staking processor only for the consensus chain.
+    // blocks_stream() is a broadcast resubscription so both processors
+    // receive every block independently.
+    if is_consensus {
+        join_set.spawn(
+            {
+                let stream = subspace.blocks_stream();
+                let block_provider = block_provider.clone();
+                let db = db.clone();
+                async move {
+                    staking::index_staking(stream, block_provider, db, process_blocks_in_parallel)
+                        .await
+                }
+            }
+            .instrument(span.clone()),
+        );
+    }
 
     // listen for all consensus blocks
     join_set.spawn(

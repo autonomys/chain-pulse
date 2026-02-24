@@ -7,8 +7,8 @@ use shared::subspace::Balance;
 use sqlx::error::BoxDynError;
 use sqlx::postgres::{PgTypeInfo, PgValueRef};
 use sqlx::{Decode as SqlxDecode, Postgres, Type};
+use std::collections::BTreeMap;
 use std::fmt::{Debug, Display, Formatter};
-use subxt::events::StaticEvent;
 use subxt::utils::{AccountId32, H160, to_hex};
 
 #[derive(Serialize, Deserialize, Default, PartialEq, Debug, Copy, Clone)]
@@ -85,71 +85,6 @@ pub(crate) type XdmChannelId = U256Compat;
 pub(crate) type XdmNonce = U256Compat;
 pub(crate) type XdmMessageId = (XdmChannelId, XdmNonce);
 
-#[derive(Debug, Clone, DecodeAsType, Eq, PartialEq)]
-pub(crate) struct OutgoingTransferInitiated {
-    pub(crate) chain_id: ChainId,
-    pub(crate) message_id: XdmMessageId,
-    pub(crate) amount: Balance,
-}
-
-impl StaticEvent for OutgoingTransferInitiated {
-    const PALLET: &'static str = "Transporter";
-    const EVENT: &'static str = "OutgoingTransferInitiated";
-}
-
-#[derive(Debug, Clone, DecodeAsType, Eq, PartialEq)]
-pub(crate) struct OutgoingTransferFailed {
-    pub(crate) chain_id: ChainId,
-    pub(crate) message_id: XdmMessageId,
-    // TODO: capture error as well
-}
-
-impl StaticEvent for OutgoingTransferFailed {
-    const PALLET: &'static str = "Transporter";
-    const EVENT: &'static str = "OutgoingTransferFailed";
-}
-
-impl From<OutgoingTransferFailed> for Event {
-    fn from(value: OutgoingTransferFailed) -> Self {
-        Event::OutgoingTransferFailed(value)
-    }
-}
-
-#[derive(Debug, Clone, DecodeAsType, Eq, PartialEq)]
-pub(crate) struct OutgoingTransferSuccessful {
-    pub(crate) chain_id: ChainId,
-    pub(crate) message_id: XdmMessageId,
-}
-
-impl StaticEvent for OutgoingTransferSuccessful {
-    const PALLET: &'static str = "Transporter";
-    const EVENT: &'static str = "OutgoingTransferSuccessful";
-}
-
-impl From<OutgoingTransferSuccessful> for Event {
-    fn from(value: OutgoingTransferSuccessful) -> Self {
-        Event::OutgoingTransferSuccessful(value)
-    }
-}
-
-#[derive(Debug, Clone, DecodeAsType, Eq, PartialEq)]
-pub(crate) struct IncomingTransferSuccessful {
-    pub(crate) chain_id: ChainId,
-    pub(crate) message_id: XdmMessageId,
-    pub(crate) amount: Balance,
-}
-
-impl StaticEvent for IncomingTransferSuccessful {
-    const PALLET: &'static str = "Transporter";
-    const EVENT: &'static str = "IncomingTransferSuccessful";
-}
-
-impl From<IncomingTransferSuccessful> for Event {
-    fn from(value: IncomingTransferSuccessful) -> Self {
-        Event::IncomingTransferSuccessful(value)
-    }
-}
-
 #[derive(Debug, Clone, DecodeAsType, Decode, Eq, PartialEq)]
 pub(crate) enum MultiAccountId {
     /// 32 byte account Id.
@@ -193,23 +128,28 @@ pub(crate) struct Transfer {
     pub receiver: Location,
 }
 
-#[derive(Debug, Clone, DecodeAsType, Eq, PartialEq)]
-pub(crate) struct OutgoingTransferInitiatedWithTransfer {
-    pub(crate) message_id: XdmMessageId,
-    pub(crate) transfer: Transfer,
+/// Mirrors `pallet_domains::staking::DomainEpoch(DomainId, EpochIndex)`.
+/// Used as the second key of the `OperatorEpochSharePrice` storage double-map.
+/// Both EncodeAsType and DecodeAsType are required by StaticStorageKey<T>.
+#[derive(Debug, Clone, DecodeAsType, EncodeAsType, Eq, PartialEq)]
+pub(crate) struct DomainEpoch(pub(crate) DomainId, pub(crate) u32);
+
+/// Partial decode of `pallet_domains::staking::StakingSummary`.
+/// Only `current_operators` is needed; the preceding fields are read-and-discarded
+/// and the remaining fields (`next_operators`, `current_epoch_rewards`) are left in
+/// the input — SCALE Decode does not require consuming all bytes.
+#[derive(Debug)]
+pub(crate) struct StakingSummary {
+    pub(crate) current_operators: BTreeMap<u64, u128>,
 }
 
-impl From<OutgoingTransferInitiatedWithTransfer> for Event {
-    fn from(value: OutgoingTransferInitiatedWithTransfer) -> Self {
-        Event::OutgoingTransferInitiated(value)
+impl Decode for StakingSummary {
+    fn decode<I: parity_scale_codec::Input>(
+        input: &mut I,
+    ) -> Result<Self, parity_scale_codec::Error> {
+        let _ = u32::decode(input)?; // current_epoch_index
+        let _ = u128::decode(input)?; // current_total_stake
+        let current_operators = BTreeMap::<u64, u128>::decode(input)?;
+        Ok(Self { current_operators })
     }
-}
-
-/// Overarching event type
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum Event {
-    OutgoingTransferInitiated(OutgoingTransferInitiatedWithTransfer),
-    OutgoingTransferFailed(OutgoingTransferFailed),
-    OutgoingTransferSuccessful(OutgoingTransferSuccessful),
-    IncomingTransferSuccessful(IncomingTransferSuccessful),
 }
