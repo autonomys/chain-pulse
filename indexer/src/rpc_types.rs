@@ -17,13 +17,12 @@ impl DomainEpochHelper {
     }
 }
 
-#[allow(dead_code)]
 pub(crate) enum OperatorStatusCompact {
     Registered,
     Deregistered,
     Slashed,
     PendingSlash,
-    InvalidBundle([u8; 32]),
+    InvalidBundle,
     Deactivated,
 }
 
@@ -34,7 +33,7 @@ impl OperatorStatusCompact {
             Self::Deregistered => "deregistered",
             Self::Slashed => "slashed",
             Self::PendingSlash => "pending_slash",
-            Self::InvalidBundle(_) => "invalid_bundle",
+            Self::InvalidBundle => "invalid_bundle",
             Self::Deactivated => "deactivated",
         }
     }
@@ -56,8 +55,8 @@ impl Decode for OperatorStatusCompact {
             2 => Ok(Self::Slashed),
             3 => Ok(Self::PendingSlash),
             4 => {
-                let hash = <[u8; 32] as Decode>::decode(input)?;
-                Ok(Self::InvalidBundle(hash))
+                let _ = <[u8; 32] as Decode>::decode(input)?; // bad_receipt_hash
+                Ok(Self::InvalidBundle)
             }
             5 => {
                 let _ = u32::decode(input)?; // at_epoch_index
