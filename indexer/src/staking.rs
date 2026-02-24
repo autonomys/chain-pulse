@@ -180,9 +180,10 @@ async fn index_epoch_share_prices(
     for operator_id in summary.current_operators.keys() {
         let domain_epoch = DomainEpoch(domain_id.clone(), epoch_index);
 
-        // Read the share price for this operator + epoch (OptionQuery — may be absent).
-        let share_price_raw = match block_ext
-            .read_storage::<_, u64>(
+        // Read the share price for this operator + epoch (OptionQuery — absent for
+        // newly registered operators that didn't participate in the completed epoch).
+        let share_price_raw: u64 = match block_ext
+            .try_read_storage(
                 "Domains",
                 "OperatorEpochSharePrice",
                 (
@@ -192,9 +193,13 @@ async fn index_epoch_share_prices(
             )
             .await
         {
-            Ok(price) => price,
+            Ok(Some(price)) => price,
+            Ok(None) => {
+                tracing::warn!(%operator_id, block_height, epoch_index, "no share price for this epoch (expected for newly registered operators)");
+                continue;
+            }
             Err(err) => {
-                tracing::warn!(%operator_id, %err, "failed to read OperatorEpochSharePrice");
+                tracing::warn!(%operator_id, block_height, epoch_index, %err, "failed to read OperatorEpochSharePrice");
                 continue;
             }
         };
