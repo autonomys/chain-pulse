@@ -111,6 +111,19 @@ impl BlockExt {
         storage: &str,
         arg_data: Args,
     ) -> Result<T, Error> {
+        self.try_read_storage(pallet, storage, arg_data)
+            .await?
+            .ok_or(Error::Storage(format!("{pallet}.{storage}")))
+    }
+
+    /// Like `read_storage` but returns `None` for absent OptionQuery entries
+    /// instead of converting to an error.
+    pub async fn try_read_storage<Args: StorageKey, T: Decode>(
+        &self,
+        pallet: &str,
+        storage: &str,
+        arg_data: Args,
+    ) -> Result<Option<T>, Error> {
         let query = subxt::dynamic::storage(pallet, storage, arg_data);
         self.client
             .storage()
@@ -118,7 +131,7 @@ impl BlockExt {
             .fetch(&query)
             .await?
             .map(|encoded| T::decode(&mut encoded.encoded()).map_err(Error::Scale))
-            .ok_or(Error::Storage(format!("{pallet}.{storage}")))?
+            .transpose()
     }
 
     /// Iterates all entries in a storage map, returning `(raw_key_bytes, decoded_value)` pairs.

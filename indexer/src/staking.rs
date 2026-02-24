@@ -69,7 +69,10 @@ async fn index_staking_for_block(
             .await
         {
             Ok(op) => op,
-            Err(_) => continue,
+            Err(err) => {
+                tracing::warn!(operator_id = e.operator_id, %err, "failed to read Operators storage");
+                continue;
+            }
         };
         let owner: SubxtAccountId32 = match block_ext
             .read_storage(
@@ -80,7 +83,10 @@ async fn index_staking_for_block(
             .await
         {
             Ok(owner) => owner,
-            Err(_) => continue,
+            Err(err) => {
+                tracing::warn!(operator_id = e.operator_id, %err, "failed to read OperatorIdOwner storage");
+                continue;
+            }
         };
         let owner_account = sp_core::crypto::AccountId32::new(owner.0).to_string();
         let signing_key_hex = format!("0x{}", hex::encode(op.signing_key));
@@ -174,9 +180,10 @@ async fn index_epoch_share_prices(
     for operator_id in summary.current_operators.keys() {
         let domain_epoch = DomainEpoch(domain_id.clone(), epoch_index);
 
-        // Read the share price for this operator + epoch (OptionQuery — may be absent).
-        let share_price_raw = match block_ext
-            .read_storage::<_, u64>(
+        // Read the share price for this operator + epoch (OptionQuery — absent for
+        // newly registered operators that didn't participate in the completed epoch).
+        let share_price_raw: u64 = match block_ext
+            .try_read_storage(
                 "Domains",
                 "OperatorEpochSharePrice",
                 (
@@ -186,8 +193,15 @@ async fn index_epoch_share_prices(
             )
             .await
         {
-            Ok(price) => price,
-            Err(_) => continue,
+            Ok(Some(price)) => price,
+            Ok(None) => {
+                tracing::warn!(%operator_id, block_height, epoch_index, "no share price for this epoch (expected for newly registered operators)");
+                continue;
+            }
+            Err(err) => {
+                tracing::warn!(%operator_id, block_height, epoch_index, %err, "failed to read OperatorEpochSharePrice");
+                continue;
+            }
         };
 
         // Read full operator data for stake/shares/status/storage-fee.
@@ -196,7 +210,10 @@ async fn index_epoch_share_prices(
             .await
         {
             Ok(op) => op,
-            Err(_) => continue,
+            Err(err) => {
+                tracing::warn!(%operator_id, %err, "failed to read Operators storage for share price update");
+                continue;
+            }
         };
 
         // Convert Perquintill to decimal: raw_u64 / 10^18
@@ -239,8 +256,7 @@ mod tests {
         DomainEpochCompleted, OperatorNominated, OperatorRegistered, WithdrewStake,
     };
     use crate::rpc_types::FullOperator;
-    use crate::storage::{Db, UpsertOperator};
-    use pgtemp::{PgTempDB, PgTempDBBuilder};
+    use crate::test_utils::{get_db, sample_operator};
     use shared::subspace::Subspace;
     use std::str::FromStr;
     use subxt::storage::StaticStorageKey;
@@ -257,40 +273,6 @@ mod tests {
         "0xe70e7da10ae1fa68f5e274e6f673ae6933386e688284186dec88fc2870f38e24";
     const OPERATOR_NOMINATED_HASH: &str =
         "0x5df7664c6e14422fdbbc68f5d78f4252e2151bce887b9659e4eea53df59e3f74";
-
-    struct TestDb {
-        db: Db,
-        _temp_db: PgTempDB,
-    }
-
-    async fn get_db() -> TestDb {
-        let temp_db = PgTempDBBuilder::new().start_async().await;
-        let db = Db::new(temp_db.connection_uri().as_str(), "./migrations")
-            .await
-            .unwrap();
-        TestDb {
-            db,
-            _temp_db: temp_db,
-        }
-    }
-
-    fn sample_operator(operator_id: u64) -> UpsertOperator {
-        UpsertOperator {
-            operator_id,
-            domain_id: 0,
-            owner_account: format!("owner_{operator_id}"),
-            signing_key: format!("0xsigning_key_{operator_id}"),
-            minimum_nominator_stake: 1_000_000_000_000_000_000,
-            nomination_tax: 5,
-            status: "registered".to_string(),
-            total_stake: 50_000_000_000_000_000_000,
-            total_shares: 50_000_000_000_000_000_000,
-            total_storage_fee_deposit: 1_000_000_000_000_000_000,
-            block_time: chrono::DateTime::from_timestamp_millis(1_700_000_000_000).unwrap(),
-        }
-    }
-
-    // ── Event-only decode tests (RPC, no DB) ─────────────────────────
 
     #[tokio::test]
     async fn test_decode_operator_registered() {
@@ -403,8 +385,6 @@ mod tests {
         let e = &completed[0];
         assert!(e.completed_epoch_index > 0, "epoch index should be > 0");
     }
-
-    // ── End-to-end tests (RPC + pgtemp DB) ───────────────────────────
 
     #[tokio::test]
     async fn test_index_staking_operator_registered() {
