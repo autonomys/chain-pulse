@@ -11,6 +11,9 @@ mod storage;
 mod types;
 mod xdm;
 
+#[cfg(test)]
+mod test_utils;
+
 use crate::error::Error;
 use crate::storage::{Db, log_db_pool_info};
 use crate::types::{ChainId, DomainId};
