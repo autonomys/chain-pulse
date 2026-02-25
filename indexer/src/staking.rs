@@ -2,7 +2,7 @@ use crate::error::Error;
 use crate::events::{
     DomainEpochCompleted, NominatedStakedUnlocked, NominatorUnlocked, OperatorDeactivated,
     OperatorDeregistered, OperatorNominated, OperatorReactivated, OperatorRegistered,
-    OperatorSlashed,
+    OperatorSlashed, StorageFeeDeposited, WithdrewStake,
 };
 use crate::processor::{self, BlockProcessor};
 use crate::rpc_types::FullOperator;
@@ -11,6 +11,7 @@ use crate::types::{DomainEpoch, StakingSummary};
 use chrono::DateTime;
 use rust_decimal::Decimal;
 use shared::subspace::{BlockNumber, BlocksStream, SubspaceBlockProvider};
+use std::collections::HashMap;
 use subxt::storage::StaticStorageKey;
 use subxt::utils::AccountId32 as SubxtAccountId32;
 
@@ -135,10 +136,39 @@ async fn index_staking_for_block(
             .await?;
     }
 
+    // Collect storage fee deposits keyed by (operator_id, nominator_id) so they
+    // can be correlated with the OperatorNominated events that follow in the same block.
+    let mut storage_fees: HashMap<(u64, String), u128> = HashMap::new();
+    for event in events.find::<StorageFeeDeposited>() {
+        let e = event?;
+        let address = sp_core::crypto::AccountId32::new(e.nominator_id.0).to_string();
+        storage_fees.insert((e.operator_id, address), e.amount);
+    }
+
     for event in events.find::<OperatorNominated>() {
         let e = event?;
         let address = sp_core::crypto::AccountId32::new(e.nominator_id.0).to_string();
         db.upsert_nominator(e.operator_id, &address, "active", block_number)
+            .await?;
+
+        let storage_fee = storage_fees
+            .remove(&(e.operator_id, address.clone()))
+            .unwrap_or(0);
+        db.insert_deposit(
+            e.operator_id,
+            &address,
+            e.amount,
+            storage_fee,
+            block_number,
+            block_time,
+        )
+        .await?;
+    }
+
+    for event in events.find::<WithdrewStake>() {
+        let e = event?;
+        let address = sp_core::crypto::AccountId32::new(e.nominator_id.0).to_string();
+        db.insert_withdrawal(e.operator_id, &address, block_number, block_time)
             .await?;
     }
 

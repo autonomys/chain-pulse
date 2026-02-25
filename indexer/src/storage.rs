@@ -124,6 +124,26 @@ impl From<(Decimal, XdmTransfer)> for api::XdmTransfer {
     }
 }
 
+#[derive(sqlx::FromRow, Serialize)]
+pub(crate) struct DepositRow {
+    pub(crate) id: i64,
+    pub(crate) operator_id: String,
+    pub(crate) address: String,
+    pub(crate) amount: String,
+    pub(crate) storage_fee: String,
+    pub(crate) block_height: i64,
+    pub(crate) block_time: DateTime<Utc>,
+}
+
+#[derive(sqlx::FromRow, Serialize)]
+pub(crate) struct WithdrawalRow {
+    pub(crate) id: i64,
+    pub(crate) operator_id: String,
+    pub(crate) address: String,
+    pub(crate) block_height: i64,
+    pub(crate) block_time: DateTime<Utc>,
+}
+
 pub(crate) struct UpsertSharePrice {
     pub(crate) operator_id: i64,
     pub(crate) domain_id: i32,
@@ -757,6 +777,109 @@ impl Db {
         .fetch_optional(&*self.pool)
         .await?;
         Ok(row)
+    }
+
+    pub(crate) async fn insert_deposit(
+        &self,
+        operator_id: u64,
+        address: &str,
+        amount: u128,
+        storage_fee: u128,
+        block_height: u32,
+        block_time: DateTime<Utc>,
+    ) -> Result<(), Error> {
+        sqlx::query(
+            r#"
+            INSERT INTO indexer.nominator_deposits
+                (operator_id, address, amount, storage_fee, block_height, block_time)
+            VALUES ($1, $2, $3::numeric(39,0), $4::numeric(39,0), $5, $6)
+            "#,
+        )
+        .bind(operator_id as i64)
+        .bind(address)
+        .bind(amount.to_string())
+        .bind(storage_fee.to_string())
+        .bind(block_height as i64)
+        .bind(block_time)
+        .execute(&*self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub(crate) async fn insert_withdrawal(
+        &self,
+        operator_id: u64,
+        address: &str,
+        block_height: u32,
+        block_time: DateTime<Utc>,
+    ) -> Result<(), Error> {
+        sqlx::query(
+            r#"
+            INSERT INTO indexer.nominator_withdrawals
+                (operator_id, address, block_height, block_time)
+            VALUES ($1, $2, $3, $4)
+            "#,
+        )
+        .bind(operator_id as i64)
+        .bind(address)
+        .bind(block_height as i64)
+        .bind(block_time)
+        .execute(&*self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub(crate) async fn get_deposits(
+        &self,
+        address: &str,
+        operator_id: i64,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<DepositRow>, Error> {
+        let rows = sqlx::query_as::<_, DepositRow>(
+            r#"
+            SELECT id, operator_id::text, address,
+                   amount::text, storage_fee::text,
+                   block_height, block_time
+            FROM indexer.nominator_deposits
+            WHERE address = $1 AND operator_id = $2
+            ORDER BY block_time DESC
+            LIMIT $3 OFFSET $4
+            "#,
+        )
+        .bind(address)
+        .bind(operator_id)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&*self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    pub(crate) async fn get_withdrawals(
+        &self,
+        address: &str,
+        operator_id: i64,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<WithdrawalRow>, Error> {
+        let rows = sqlx::query_as::<_, WithdrawalRow>(
+            r#"
+            SELECT id, operator_id::text, address,
+                   block_height, block_time
+            FROM indexer.nominator_withdrawals
+            WHERE address = $1 AND operator_id = $2
+            ORDER BY block_time DESC
+            LIMIT $3 OFFSET $4
+            "#,
+        )
+        .bind(address)
+        .bind(operator_id)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&*self.pool)
+        .await?;
+        Ok(rows)
     }
 }
 
