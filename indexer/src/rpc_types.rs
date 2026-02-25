@@ -73,18 +73,22 @@ impl Decode for OperatorStatusCompact {
 /// On-chain SCALE layout for `Domains::Withdrawals` storage double-map.
 ///
 ///   total_withdrawal_amount:              u128
-///   withdrawals:                          BTreeMap<u32, { amount_to_unlock: u128, storage_fee_refund: u128 }>
+///   total_storage_fee_withdrawal:         u128
+///   withdrawals:                          VecDeque<{
+///       unlock_at_confirmed_domain_block_number: u32,
+///       amount_to_unlock: u128,
+///       storage_fee_refund: u128,
+///   }>
 ///   withdrawal_in_shares:                 Option<{
 ///       domain_epoch: (DomainId(u32), EpochIndex(u32)),
 ///       unlock_at_confirmed_domain_block_number: u32,
 ///       shares: u128,
 ///       storage_fee_refund: u128,
 ///   }>
-///   storage_fee_refund:                   u128   (top-level cumulative)
 ///
 /// When `withdrawal_in_shares` is present we extract shares and its refund directly.
 /// When it is `None` (epoch transition already converted shares to balance in the same
-/// block), we fall back to the last entry in the `withdrawals` BTreeMap for the
+/// block), we fall back to the last entry in the `withdrawals` VecDeque for the
 /// converted balance amount and per-withdrawal storage_fee_refund.
 pub(crate) struct NominatorWithdrawal {
     pub(crate) shares: u128,
@@ -97,14 +101,15 @@ impl Decode for NominatorWithdrawal {
         input: &mut I,
     ) -> Result<Self, parity_scale_codec::Error> {
         let _ = u128::decode(input)?; // total_withdrawal_amount
+        let _ = u128::decode(input)?; // total_storage_fee_withdrawal
 
-        // withdrawals: BTreeMap<DomainBlockNumber, WithdrawalInBalance>
-        // Track the last entry (highest block number) as fallback.
+        // withdrawals: VecDeque<WithdrawalInBalance>
+        // Track the last entry as fallback when shares have already been converted.
         let len = parity_scale_codec::Compact::<u32>::decode(input)?.0;
         let mut last_amount: u128 = 0;
         let mut last_refund: u128 = 0;
         for _ in 0..len {
-            let _ = u32::decode(input)?; // DomainBlockNumber key
+            let _ = u32::decode(input)?; // unlock_at_confirmed_domain_block_number
             last_amount = u128::decode(input)?; // amount_to_unlock
             last_refund = u128::decode(input)?; // storage_fee_refund
         }
@@ -112,8 +117,7 @@ impl Decode for NominatorWithdrawal {
         // withdrawal_in_shares: Option<WithdrawalInShares>
         let variant = u8::decode(input)?;
         if variant == 0 {
-            // Shares already epoch-converted; fall back to the last BTreeMap entry.
-            let _ = u128::decode(input)?; // top-level storage_fee_refund (cumulative, skip)
+            // Shares already epoch-converted; fall back to the last VecDeque entry.
             return Ok(Self {
                 shares: 0,
                 amount: last_amount,
@@ -125,7 +129,6 @@ impl Decode for NominatorWithdrawal {
         let _ = u32::decode(input)?; // unlock_at_confirmed_domain_block_number
         let shares = u128::decode(input)?;
         let storage_fee_refund = u128::decode(input)?;
-        let _ = u128::decode(input)?; // top-level storage_fee_refund (cumulative, skip)
         Ok(Self {
             shares,
             amount: 0,
@@ -182,5 +185,145 @@ impl Decode for FullOperator {
             status,
             total_storage_fee_deposit,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::events::{OperatorRegistered, WithdrewStake};
+    use shared::subspace::Subspace;
+    use std::str::FromStr;
+    use subxt::storage::StaticStorageKey;
+
+    const RPC_URL: &str = "wss://rpc.mainnet.autonomys.xyz/ws";
+
+    /// Block containing a WithdrewStake event (post runtime upgrade layout).
+    const WITHDREW_STAKE_BLOCK: u32 = 6_718_423;
+
+    /// Block containing an OperatorRegistered event (used by staking.rs tests too).
+    const OPERATOR_REGISTERED_HASH: &str =
+        "0x9749ce3959c6e613a85f1576331ebb138aa3f00492dcde3b37ae978bb399c364";
+
+    #[tokio::test]
+    async fn test_decode_nominator_withdrawal() {
+        let subspace = Subspace::new_from_url(RPC_URL)
+            .await
+            .unwrap()
+            .block_provider();
+
+        let block_ext = subspace
+            .block_ext_at_number(WITHDREW_STAKE_BLOCK)
+            .await
+            .unwrap();
+        let events = block_ext.events().await.unwrap();
+
+        let withdrew: Vec<_> = events
+            .find::<WithdrewStake>()
+            .filter_map(|e| e.ok())
+            .collect();
+        assert!(
+            !withdrew.is_empty(),
+            "block {WITHDREW_STAKE_BLOCK} should contain a WithdrewStake event"
+        );
+
+        for e in &withdrew {
+            let withdrawal: NominatorWithdrawal = block_ext
+                .try_read_storage(
+                    "Domains",
+                    "Withdrawals",
+                    (
+                        StaticStorageKey::new(e.operator_id),
+                        StaticStorageKey::new(e.nominator_id.clone()),
+                    ),
+                )
+                .await
+                .expect("Withdrawals storage should decode without error")
+                .expect("Withdrawals entry should exist after WithdrewStake");
+
+            // At least one of shares or amount must be non-zero.
+            assert!(
+                withdrawal.shares > 0 || withdrawal.amount > 0,
+                "withdrawal for operator {} should have shares or amount",
+                e.operator_id,
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_decode_full_operator() {
+        let subspace = Subspace::new_from_url(RPC_URL)
+            .await
+            .unwrap()
+            .block_provider();
+
+        let block_hash = subxt::utils::H256::from_str(OPERATOR_REGISTERED_HASH).unwrap();
+        let block_ext = subspace.block_ext_at_hash(block_hash).await.unwrap();
+        let events = block_ext.events().await.unwrap();
+
+        let registered: Vec<_> = events
+            .find::<OperatorRegistered>()
+            .filter_map(|e| e.ok())
+            .collect();
+        assert!(!registered.is_empty());
+
+        let e = &registered[0];
+        let op: FullOperator = block_ext
+            .read_storage("Domains", "Operators", StaticStorageKey::new(e.operator_id))
+            .await
+            .expect("FullOperator should decode without error");
+
+        assert!(
+            op.current_total_stake > 0 || op.current_total_shares > 0,
+            "operator should have stake or shares"
+        );
+        assert_eq!(
+            op.status.as_str(),
+            "registered",
+            "freshly registered operator should have 'registered' status"
+        );
+        assert!(
+            op.minimum_nominator_stake > 0,
+            "minimum_nominator_stake should be > 0"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_decode_full_operator_at_recent_block() {
+        let subspace = Subspace::new_from_url(RPC_URL)
+            .await
+            .unwrap()
+            .block_provider();
+
+        // Use the same block as WithdrewStake — this is post-upgrade so it
+        // validates the FullOperator layout hasn't drifted either.
+        let block_ext = subspace
+            .block_ext_at_number(WITHDREW_STAKE_BLOCK)
+            .await
+            .unwrap();
+
+        let withdrew: Vec<_> = block_ext
+            .events()
+            .await
+            .unwrap()
+            .find::<WithdrewStake>()
+            .filter_map(|e| e.ok())
+            .collect();
+        assert!(!withdrew.is_empty());
+
+        let op: FullOperator = block_ext
+            .read_storage(
+                "Domains",
+                "Operators",
+                StaticStorageKey::new(withdrew[0].operator_id),
+            )
+            .await
+            .expect("FullOperator should decode at recent block without error");
+
+        // Sanity check: the operator referenced by a withdrawal should exist.
+        assert!(
+            !op.signing_key.iter().all(|&b| b == 0),
+            "signing_key should not be all zeros"
+        );
     }
 }
