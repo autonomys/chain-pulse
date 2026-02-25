@@ -126,7 +126,6 @@ impl From<(Decimal, XdmTransfer)> for api::XdmTransfer {
 
 #[derive(sqlx::FromRow, Serialize)]
 pub(crate) struct DepositRow {
-    pub(crate) id: i64,
     pub(crate) operator_id: String,
     pub(crate) address: String,
     pub(crate) amount: String,
@@ -137,10 +136,22 @@ pub(crate) struct DepositRow {
 
 #[derive(sqlx::FromRow, Serialize)]
 pub(crate) struct WithdrawalRow {
-    pub(crate) id: i64,
     pub(crate) operator_id: String,
     pub(crate) address: String,
+    pub(crate) shares: String,
+    pub(crate) amount: String,
+    pub(crate) storage_fee_refund: String,
     pub(crate) block_height: i64,
+    pub(crate) block_time: DateTime<Utc>,
+}
+
+pub(crate) struct InsertWithdrawal<'a> {
+    pub(crate) operator_id: u64,
+    pub(crate) address: &'a str,
+    pub(crate) shares: u128,
+    pub(crate) amount: u128,
+    pub(crate) storage_fee_refund: u128,
+    pub(crate) block_height: u32,
     pub(crate) block_time: DateTime<Utc>,
 }
 
@@ -779,6 +790,25 @@ impl Db {
         Ok(row)
     }
 
+    pub(crate) async fn delete_deposits_for_block(&self, block_height: u32) -> Result<(), Error> {
+        sqlx::query("DELETE FROM indexer.nominator_deposits WHERE block_height = $1")
+            .bind(block_height as i64)
+            .execute(&*self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub(crate) async fn delete_withdrawals_for_block(
+        &self,
+        block_height: u32,
+    ) -> Result<(), Error> {
+        sqlx::query("DELETE FROM indexer.nominator_withdrawals WHERE block_height = $1")
+            .bind(block_height as i64)
+            .execute(&*self.pool)
+            .await?;
+        Ok(())
+    }
+
     pub(crate) async fn insert_deposit(
         &self,
         operator_id: u64,
@@ -806,24 +836,21 @@ impl Db {
         Ok(())
     }
 
-    pub(crate) async fn insert_withdrawal(
-        &self,
-        operator_id: u64,
-        address: &str,
-        block_height: u32,
-        block_time: DateTime<Utc>,
-    ) -> Result<(), Error> {
+    pub(crate) async fn insert_withdrawal(&self, w: &InsertWithdrawal<'_>) -> Result<(), Error> {
         sqlx::query(
             r#"
             INSERT INTO indexer.nominator_withdrawals
-                (operator_id, address, block_height, block_time)
-            VALUES ($1, $2, $3, $4)
+                (operator_id, address, shares, amount, storage_fee_refund, block_height, block_time)
+            VALUES ($1, $2, $3::numeric(39,0), $4::numeric(39,0), $5::numeric(39,0), $6, $7)
             "#,
         )
-        .bind(operator_id as i64)
-        .bind(address)
-        .bind(block_height as i64)
-        .bind(block_time)
+        .bind(w.operator_id as i64)
+        .bind(w.address)
+        .bind(w.shares.to_string())
+        .bind(w.amount.to_string())
+        .bind(w.storage_fee_refund.to_string())
+        .bind(w.block_height as i64)
+        .bind(w.block_time)
         .execute(&*self.pool)
         .await?;
         Ok(())
@@ -838,7 +865,7 @@ impl Db {
     ) -> Result<Vec<DepositRow>, Error> {
         let rows = sqlx::query_as::<_, DepositRow>(
             r#"
-            SELECT id, operator_id::text, address,
+            SELECT operator_id::text, address,
                    amount::text, storage_fee::text,
                    block_height, block_time
             FROM indexer.nominator_deposits
@@ -865,7 +892,8 @@ impl Db {
     ) -> Result<Vec<WithdrawalRow>, Error> {
         let rows = sqlx::query_as::<_, WithdrawalRow>(
             r#"
-            SELECT id, operator_id::text, address,
+            SELECT operator_id::text, address,
+                   shares::text, amount::text, storage_fee_refund::text,
                    block_height, block_time
             FROM indexer.nominator_withdrawals
             WHERE address = $1 AND operator_id = $2
@@ -880,6 +908,23 @@ impl Db {
         .fetch_all(&*self.pool)
         .await?;
         Ok(rows)
+    }
+
+    pub(crate) async fn get_nominator_operator_ids(
+        &self,
+        address: &str,
+    ) -> Result<Vec<String>, Error> {
+        let rows: Vec<(String,)> = sqlx::query_as(
+            r#"
+            SELECT operator_id::text
+            FROM indexer.nominators
+            WHERE address = $1
+            "#,
+        )
+        .bind(address)
+        .fetch_all(&*self.pool)
+        .await?;
+        Ok(rows.into_iter().map(|r| r.0).collect())
     }
 }
 

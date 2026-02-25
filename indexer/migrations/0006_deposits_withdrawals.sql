@@ -1,6 +1,5 @@
 CREATE TABLE IF NOT EXISTS indexer.nominator_deposits
 (
-    id            BIGSERIAL PRIMARY KEY,
     operator_id   BIGINT          NOT NULL,
     address       TEXT            NOT NULL,
     amount        NUMERIC(39, 0) NOT NULL,
@@ -14,11 +13,13 @@ CREATE INDEX IF NOT EXISTS deposits_addr_op_time_idx
 
 CREATE TABLE IF NOT EXISTS indexer.nominator_withdrawals
 (
-    id            BIGSERIAL PRIMARY KEY,
-    operator_id   BIGINT          NOT NULL,
-    address       TEXT            NOT NULL,
-    block_height  BIGINT          NOT NULL,
-    block_time    TIMESTAMPTZ     NOT NULL
+    operator_id        BIGINT          NOT NULL,
+    address            TEXT            NOT NULL,
+    shares             NUMERIC(39, 0) NOT NULL DEFAULT 0,
+    amount             NUMERIC(39, 0) NOT NULL DEFAULT 0,
+    storage_fee_refund NUMERIC(39, 0) NOT NULL DEFAULT 0,
+    block_height       BIGINT          NOT NULL,
+    block_time         TIMESTAMPTZ     NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS withdrawals_addr_op_time_idx

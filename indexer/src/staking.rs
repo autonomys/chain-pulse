@@ -5,8 +5,8 @@ use crate::events::{
     OperatorSlashed, StorageFeeDeposited, WithdrewStake,
 };
 use crate::processor::{self, BlockProcessor};
-use crate::rpc_types::FullOperator;
-use crate::storage::{Db, UpsertOperator, UpsertSharePrice};
+use crate::rpc_types::{FullOperator, NominatorWithdrawal};
+use crate::storage::{Db, InsertWithdrawal, UpsertOperator, UpsertSharePrice};
 use crate::types::{DomainEpoch, StakingSummary};
 use chrono::DateTime;
 use rust_decimal::Decimal;
@@ -63,6 +63,11 @@ async fn index_staking_for_block(
     let block_time = DateTime::from_timestamp_millis(block_ext.timestamp().await? as i64)
         .expect("should always be a valid Unix epoch time");
     let events = block_ext.events().await?;
+
+    // Delete any existing deposit/withdrawal rows for this block so
+    // reprocessing the same block (e.g. after a checkpoint reset) is idempotent.
+    db.delete_deposits_for_block(block_number).await?;
+    db.delete_withdrawals_for_block(block_number).await?;
 
     for event in events.find::<OperatorRegistered>() {
         let e = event?;
@@ -138,11 +143,14 @@ async fn index_staking_for_block(
 
     // Collect storage fee deposits keyed by (operator_id, nominator_id) so they
     // can be correlated with the OperatorNominated events that follow in the same block.
-    let mut storage_fees: HashMap<(u64, String), u128> = HashMap::new();
+    let mut storage_fees: HashMap<(u64, String), Vec<u128>> = HashMap::new();
     for event in events.find::<StorageFeeDeposited>() {
         let e = event?;
         let address = sp_core::crypto::AccountId32::new(e.nominator_id.0).to_string();
-        storage_fees.insert((e.operator_id, address), e.amount);
+        storage_fees
+            .entry((e.operator_id, address))
+            .or_default()
+            .push(e.amount);
     }
 
     for event in events.find::<OperatorNominated>() {
@@ -152,7 +160,14 @@ async fn index_staking_for_block(
             .await?;
 
         let storage_fee = storage_fees
-            .remove(&(e.operator_id, address.clone()))
+            .get_mut(&(e.operator_id, address.clone()))
+            .and_then(|fees| {
+                if fees.is_empty() {
+                    None
+                } else {
+                    Some(fees.remove(0))
+                }
+            })
             .unwrap_or(0);
         db.insert_deposit(
             e.operator_id,
@@ -168,8 +183,46 @@ async fn index_staking_for_block(
     for event in events.find::<WithdrewStake>() {
         let e = event?;
         let address = sp_core::crypto::AccountId32::new(e.nominator_id.0).to_string();
-        db.insert_withdrawal(e.operator_id, &address, block_number, block_time)
-            .await?;
+        // Read the Withdrawals storage to get the shares being withdrawn.
+        let withdrawal: NominatorWithdrawal = match block_ext
+            .try_read_storage(
+                "Domains",
+                "Withdrawals",
+                (
+                    StaticStorageKey::new(e.operator_id),
+                    StaticStorageKey::new(e.nominator_id.clone()),
+                ),
+            )
+            .await
+        {
+            Ok(Some(w)) => w,
+            Ok(None) => {
+                tracing::warn!(operator_id = e.operator_id, %address, "no Withdrawals entry after WithdrewStake");
+                NominatorWithdrawal {
+                    shares: 0,
+                    amount: 0,
+                    storage_fee_refund: 0,
+                }
+            }
+            Err(err) => {
+                tracing::warn!(operator_id = e.operator_id, %address, %err, "failed to read Withdrawals storage");
+                NominatorWithdrawal {
+                    shares: 0,
+                    amount: 0,
+                    storage_fee_refund: 0,
+                }
+            }
+        };
+        db.insert_withdrawal(&InsertWithdrawal {
+            operator_id: e.operator_id,
+            address: &address,
+            shares: withdrawal.shares,
+            amount: withdrawal.amount,
+            storage_fee_refund: withdrawal.storage_fee_refund,
+            block_height: block_number,
+            block_time,
+        })
+        .await?;
     }
 
     // NominatorUnlocked fires for deregistered operators via do_unlock_nominator

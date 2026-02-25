@@ -126,16 +126,18 @@ async fn recent_xdm_transfers(
 
 pub(crate) fn staking_config(cfg: &mut web::ServiceConfig) {
     cfg.service(
-        web::scope("/v1/staking").service(
-            web::scope("/operators").service(get_all_operators).service(
-                web::scope("/{operator_id}")
-                    .service(get_operator)
-                    .service(operator_share_prices)
-                    .service(operator_nominator_count)
-                    .service(operator_deposits)
-                    .service(operator_withdrawals),
+        web::scope("/v1/staking")
+            .service(nominator_operator_ids)
+            .service(
+                web::scope("/operators").service(get_all_operators).service(
+                    web::scope("/{operator_id}")
+                        .service(get_operator)
+                        .service(operator_share_prices)
+                        .service(operator_nominator_count)
+                        .service(operator_deposits)
+                        .service(operator_withdrawals),
+                ),
             ),
-        ),
     );
 }
 
@@ -294,7 +296,6 @@ fn default_tx_limit() -> i64 {
 
 #[derive(Serialize)]
 struct DepositResponse {
-    id: i64,
     operator_id: String,
     address: String,
     amount: String,
@@ -306,7 +307,6 @@ struct DepositResponse {
 impl From<DepositRow> for DepositResponse {
     fn from(r: DepositRow) -> Self {
         Self {
-            id: r.id,
             operator_id: r.operator_id,
             address: r.address,
             amount: r.amount,
@@ -341,9 +341,11 @@ async fn operator_deposits(
 
 #[derive(Serialize)]
 struct WithdrawalResponse {
-    id: i64,
     operator_id: String,
     address: String,
+    shares: String,
+    amount: String,
+    storage_fee_refund: String,
     block_height: i64,
     timestamp: DateTime<Utc>,
 }
@@ -351,9 +353,11 @@ struct WithdrawalResponse {
 impl From<WithdrawalRow> for WithdrawalResponse {
     fn from(r: WithdrawalRow) -> Self {
         Self {
-            id: r.id,
             operator_id: r.operator_id,
             address: r.address,
+            shares: r.shares,
+            amount: r.amount,
+            storage_fee_refund: r.storage_fee_refund,
             block_height: r.block_height,
             timestamp: r.block_time,
         }
@@ -380,4 +384,18 @@ async fn operator_withdrawals(
         .await?;
     let response: Vec<WithdrawalResponse> = rows.into_iter().map(Into::into).collect();
     Ok(web::Json(response))
+}
+
+#[derive(Deserialize)]
+struct NominatorQuery {
+    address: String,
+}
+
+#[get("/nominators/operators")]
+async fn nominator_operator_ids(
+    data: web::Data<WebState>,
+    info: web::Query<NominatorQuery>,
+) -> Result<impl Responder, Error> {
+    let ids = data.db.get_nominator_operator_ids(&info.address).await?;
+    Ok(web::Json(ids))
 }
