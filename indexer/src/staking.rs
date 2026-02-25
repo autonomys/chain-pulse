@@ -140,6 +140,7 @@ async fn index_staking_for_block(
         let address = sp_core::crypto::AccountId32::new(e.nominator_id.0).to_string();
         db.upsert_nominator(e.operator_id, &address, "active", block_number)
             .await?;
+        refresh_operator_stats(&block_ext, e.operator_id, block_time, db).await?;
     }
 
     // NominatorUnlocked fires for deregistered operators via do_unlock_nominator
@@ -149,6 +150,7 @@ async fn index_staking_for_block(
         let address = sp_core::crypto::AccountId32::new(e.nominator_id.0).to_string();
         db.upsert_nominator(e.operator_id, &address, "withdrawn", block_number)
             .await?;
+        refresh_operator_stats(&block_ext, e.operator_id, block_time, db).await?;
     }
 
     // NominatedStakedUnlocked fires for registered operators via do_unlock_funds.
@@ -170,6 +172,7 @@ async fn index_staking_for_block(
         let status = if has_deposit { "active" } else { "withdrawn" };
         db.upsert_nominator(e.operator_id, &address, status, block_number)
             .await?;
+        refresh_operator_stats(&block_ext, e.operator_id, block_time, db).await?;
     }
 
     for event in events.find::<DomainEpochCompleted>() {
@@ -178,6 +181,34 @@ async fn index_staking_for_block(
     }
 
     Ok(())
+}
+
+/// Read the current on-chain operator state and update the DB row.
+async fn refresh_operator_stats(
+    block_ext: &shared::subspace::BlockExt,
+    operator_id: u64,
+    block_time: DateTime<chrono::Utc>,
+    db: &Db,
+) -> Result<(), Error> {
+    let op: FullOperator = match block_ext
+        .read_storage("Domains", "Operators", StaticStorageKey::new(operator_id))
+        .await
+    {
+        Ok(op) => op,
+        Err(err) => {
+            tracing::warn!(%operator_id, %err, "failed to read Operators storage for stats refresh");
+            return Ok(());
+        }
+    };
+    db.update_operator_stats(
+        operator_id,
+        op.status.as_str(),
+        op.current_total_stake,
+        op.current_total_shares,
+        op.total_storage_fee_deposit,
+        block_time,
+    )
+    .await
 }
 
 async fn index_epoch_share_prices(

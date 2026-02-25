@@ -148,6 +148,7 @@ struct OperatorResponse {
     total_shares: String,
     total_storage_fee_deposit: String,
     status: String,
+    nominator_count: i64,
 }
 
 fn map_operator_row(row: OperatorRow) -> OperatorResponse {
@@ -162,6 +163,7 @@ fn map_operator_row(row: OperatorRow) -> OperatorResponse {
         total_shares: row.total_shares,
         total_storage_fee_deposit: row.total_storage_fee_deposit,
         status: row.status,
+        nominator_count: row.nominator_count,
     }
 }
 

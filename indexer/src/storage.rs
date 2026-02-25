@@ -174,6 +174,7 @@ pub(crate) struct OperatorRow {
     pub(crate) total_stake: String,
     pub(crate) total_shares: String,
     pub(crate) total_storage_fee_deposit: String,
+    pub(crate) nominator_count: i64,
 }
 
 #[derive(Clone)]
@@ -512,14 +513,25 @@ impl Db {
         status: &str,
         block_height: u32,
     ) -> Result<(), Error> {
+        // Upsert the nominator row, then refresh the materialized count on the
+        // operators table so we never need a COUNT(*) at query time.
         sqlx::query(
             r#"
-            INSERT INTO indexer.nominators (operator_id, address, status, block_height)
-            VALUES ($1, $2, $3, $4)
-            ON CONFLICT (operator_id, address) DO UPDATE
-                SET status = EXCLUDED.status,
-                    block_height = EXCLUDED.block_height
-                WHERE EXCLUDED.block_height >= indexer.nominators.block_height
+            WITH upsert AS (
+                INSERT INTO indexer.nominators (operator_id, address, status, block_height)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (operator_id, address) DO UPDATE
+                    SET status = EXCLUDED.status,
+                        block_height = EXCLUDED.block_height
+                    WHERE EXCLUDED.block_height >= indexer.nominators.block_height
+                RETURNING operator_id
+            )
+            UPDATE indexer.operators
+            SET nominator_count = (
+                SELECT COUNT(*) FROM indexer.nominators
+                WHERE operator_id = $1 AND status = 'active'
+            )
+            WHERE operator_id = $1
             "#,
         )
         .bind(operator_id as i64)
@@ -713,7 +725,7 @@ impl Db {
             SELECT operator_id::text, domain_id::text, owner_account,
                    signing_key, minimum_nominator_stake::text, nomination_tax,
                    status, total_stake::text, total_shares::text,
-                   total_storage_fee_deposit::text
+                   total_storage_fee_deposit::text, nominator_count
             FROM indexer.operators
             ORDER BY operators.operator_id ASC
             "#,
@@ -732,7 +744,7 @@ impl Db {
             SELECT operator_id::text, domain_id::text, owner_account,
                    signing_key, minimum_nominator_stake::text, nomination_tax,
                    status, total_stake::text, total_shares::text,
-                   total_storage_fee_deposit::text
+                   total_storage_fee_deposit::text, nominator_count
             FROM indexer.operators
             WHERE operator_id = $1
             "#,
