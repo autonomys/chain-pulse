@@ -513,19 +513,25 @@ impl Db {
         status: &str,
         block_height: u32,
     ) -> Result<(), Error> {
-        // Upsert the nominator row, then refresh the materialized count on the
-        // operators table so we never need a COUNT(*) at query time.
         sqlx::query(
             r#"
-            WITH upsert AS (
-                INSERT INTO indexer.nominators (operator_id, address, status, block_height)
-                VALUES ($1, $2, $3, $4)
-                ON CONFLICT (operator_id, address) DO UPDATE
-                    SET status = EXCLUDED.status,
-                        block_height = EXCLUDED.block_height
-                    WHERE EXCLUDED.block_height >= indexer.nominators.block_height
-                RETURNING operator_id
-            )
+            INSERT INTO indexer.nominators (operator_id, address, status, block_height)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (operator_id, address) DO UPDATE
+                SET status = EXCLUDED.status,
+                    block_height = EXCLUDED.block_height
+                WHERE EXCLUDED.block_height >= indexer.nominators.block_height
+            "#,
+        )
+        .bind(operator_id as i64)
+        .bind(address)
+        .bind(status)
+        .bind(block_height as i64)
+        .execute(&*self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
             UPDATE indexer.operators
             SET nominator_count = (
                 SELECT COUNT(*) FROM indexer.nominators
@@ -535,11 +541,9 @@ impl Db {
             "#,
         )
         .bind(operator_id as i64)
-        .bind(address)
-        .bind(status)
-        .bind(block_height as i64)
         .execute(&*self.pool)
         .await?;
+
         Ok(())
     }
 
