@@ -108,11 +108,22 @@ impl StaticEvent for DomainEpochCompleted {
 }
 
 #[derive(Debug, Clone, DecodeAsType)]
+pub(crate) struct StorageFeeDeposited {
+    pub(crate) operator_id: u64,
+    pub(crate) nominator_id: AccountId32,
+    pub(crate) amount: Balance,
+}
+
+impl StaticEvent for StorageFeeDeposited {
+    const PALLET: &'static str = "Domains";
+    const EVENT: &'static str = "StorageFeeDeposited";
+}
+
+#[derive(Debug, Clone, DecodeAsType)]
 pub(crate) struct OperatorNominated {
     pub(crate) operator_id: u64,
     pub(crate) nominator_id: AccountId32,
-    // `amount` is present in the on-chain event but not needed here;
-    // DecodeAsType decodes by field-name matching so omitting it is safe.
+    pub(crate) amount: Balance,
 }
 
 impl StaticEvent for OperatorNominated {
@@ -129,6 +140,17 @@ pub(crate) struct NominatorUnlocked {
 impl StaticEvent for NominatorUnlocked {
     const PALLET: &'static str = "Domains";
     const EVENT: &'static str = "NominatorUnlocked";
+}
+
+#[derive(Debug, Clone, DecodeAsType)]
+pub(crate) struct WithdrewStake {
+    pub(crate) operator_id: u64,
+    pub(crate) nominator_id: AccountId32,
+}
+
+impl StaticEvent for WithdrewStake {
+    const PALLET: &'static str = "Domains";
+    const EVENT: &'static str = "WithdrewStake";
 }
 
 /// Emitted by `unlock_funds` when a withdrawal's locking period completes.

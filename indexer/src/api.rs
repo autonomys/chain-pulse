@@ -1,7 +1,7 @@
 use crate::WebState;
 use crate::error::Error;
 use crate::staking::CHECKPOINT_KEY as STAKING_CHECKPOINT_KEY;
-use crate::storage::{OperatorRow, SharePriceRow};
+use crate::storage::{DepositRow, OperatorRow, SharePriceRow, WithdrawalRow};
 use crate::types::{ChainId, DomainId};
 use crate::xdm::get_xdm_processor_key;
 use actix_web::{Responder, get, web};
@@ -13,6 +13,7 @@ use tokio::try_join;
 
 const MAX_RECENT_TRANSFERS: u64 = 10;
 const MAX_SHARE_PRICE_LIMIT: i64 = 50;
+const MAX_TX_HISTORY_LIMIT: i64 = 50;
 
 pub(crate) fn health_config(cfg: &mut web::ServiceConfig) {
     cfg.service(health_check);
@@ -125,14 +126,18 @@ async fn recent_xdm_transfers(
 
 pub(crate) fn staking_config(cfg: &mut web::ServiceConfig) {
     cfg.service(
-        web::scope("/v1/staking").service(
-            web::scope("/operators").service(get_all_operators).service(
-                web::scope("/{operator_id}")
-                    .service(get_operator)
-                    .service(operator_share_prices)
-                    .service(operator_nominator_count),
+        web::scope("/v1/staking")
+            .service(nominator_operator_ids)
+            .service(
+                web::scope("/operators").service(get_all_operators).service(
+                    web::scope("/{operator_id}")
+                        .service(get_operator)
+                        .service(operator_share_prices)
+                        .service(operator_nominator_count)
+                        .service(operator_deposits)
+                        .service(operator_withdrawals),
+                ),
             ),
-        ),
     );
 }
 
@@ -274,4 +279,123 @@ async fn operator_nominator_count(
         operator_id,
         active_count,
     }))
+}
+
+#[derive(Deserialize)]
+struct TxHistoryQuery {
+    address: String,
+    #[serde(default = "default_tx_limit")]
+    limit: i64,
+    #[serde(default)]
+    offset: i64,
+}
+
+fn default_tx_limit() -> i64 {
+    MAX_TX_HISTORY_LIMIT
+}
+
+#[derive(Serialize)]
+struct DepositResponse {
+    operator_id: String,
+    address: String,
+    amount: String,
+    storage_fee: String,
+    block_height: i64,
+    timestamp: DateTime<Utc>,
+}
+
+impl From<DepositRow> for DepositResponse {
+    fn from(r: DepositRow) -> Self {
+        Self {
+            operator_id: r.operator_id,
+            address: r.address,
+            amount: r.amount,
+            storage_fee: r.storage_fee,
+            block_height: r.block_height,
+            timestamp: r.block_time,
+        }
+    }
+}
+
+#[get("/deposits")]
+async fn operator_deposits(
+    data: web::Data<WebState>,
+    path: web::Path<i64>,
+    info: web::Query<TxHistoryQuery>,
+) -> Result<impl Responder, Error> {
+    let operator_id = path.into_inner();
+    let TxHistoryQuery {
+        address,
+        limit,
+        offset,
+    } = info.into_inner();
+    let limit = limit.clamp(1, MAX_TX_HISTORY_LIMIT);
+    let offset = offset.max(0);
+    let rows = data
+        .db
+        .get_deposits(&address, operator_id, limit, offset)
+        .await?;
+    let response: Vec<DepositResponse> = rows.into_iter().map(Into::into).collect();
+    Ok(web::Json(response))
+}
+
+#[derive(Serialize)]
+struct WithdrawalResponse {
+    operator_id: String,
+    address: String,
+    shares: String,
+    amount: String,
+    storage_fee_refund: String,
+    block_height: i64,
+    timestamp: DateTime<Utc>,
+}
+
+impl From<WithdrawalRow> for WithdrawalResponse {
+    fn from(r: WithdrawalRow) -> Self {
+        Self {
+            operator_id: r.operator_id,
+            address: r.address,
+            shares: r.shares,
+            amount: r.amount,
+            storage_fee_refund: r.storage_fee_refund,
+            block_height: r.block_height,
+            timestamp: r.block_time,
+        }
+    }
+}
+
+#[get("/withdrawals")]
+async fn operator_withdrawals(
+    data: web::Data<WebState>,
+    path: web::Path<i64>,
+    info: web::Query<TxHistoryQuery>,
+) -> Result<impl Responder, Error> {
+    let operator_id = path.into_inner();
+    let TxHistoryQuery {
+        address,
+        limit,
+        offset,
+    } = info.into_inner();
+    let limit = limit.clamp(1, MAX_TX_HISTORY_LIMIT);
+    let offset = offset.max(0);
+    let rows = data
+        .db
+        .get_withdrawals(&address, operator_id, limit, offset)
+        .await?;
+    let response: Vec<WithdrawalResponse> = rows.into_iter().map(Into::into).collect();
+    Ok(web::Json(response))
+}
+
+#[derive(Deserialize)]
+struct NominatorQuery {
+    address: String,
+}
+
+#[get("/nominators/operators")]
+async fn nominator_operator_ids(
+    data: web::Data<WebState>,
+    info: web::Query<NominatorQuery>,
+) -> Result<impl Responder, Error> {
+    let ids = data.db.get_nominator_operator_ids(&info.address).await?;
+    Ok(web::Json(ids))
 }

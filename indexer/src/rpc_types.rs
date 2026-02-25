@@ -70,6 +70,70 @@ impl Decode for OperatorStatusCompact {
     }
 }
 
+/// On-chain SCALE layout for `Domains::Withdrawals` storage double-map.
+///
+///   total_withdrawal_amount:              u128
+///   withdrawals:                          BTreeMap<u32, { amount_to_unlock: u128, storage_fee_refund: u128 }>
+///   withdrawal_in_shares:                 Option<{
+///       domain_epoch: (DomainId(u32), EpochIndex(u32)),
+///       unlock_at_confirmed_domain_block_number: u32,
+///       shares: u128,
+///       storage_fee_refund: u128,
+///   }>
+///   storage_fee_refund:                   u128   (top-level cumulative)
+///
+/// When `withdrawal_in_shares` is present we extract shares and its refund directly.
+/// When it is `None` (epoch transition already converted shares to balance in the same
+/// block), we fall back to the last entry in the `withdrawals` BTreeMap for the
+/// converted balance amount and per-withdrawal storage_fee_refund.
+pub(crate) struct NominatorWithdrawal {
+    pub(crate) shares: u128,
+    pub(crate) amount: u128,
+    pub(crate) storage_fee_refund: u128,
+}
+
+impl Decode for NominatorWithdrawal {
+    fn decode<I: parity_scale_codec::Input>(
+        input: &mut I,
+    ) -> Result<Self, parity_scale_codec::Error> {
+        let _ = u128::decode(input)?; // total_withdrawal_amount
+
+        // withdrawals: BTreeMap<DomainBlockNumber, WithdrawalInBalance>
+        // Track the last entry (highest block number) as fallback.
+        let len = parity_scale_codec::Compact::<u32>::decode(input)?.0;
+        let mut last_amount: u128 = 0;
+        let mut last_refund: u128 = 0;
+        for _ in 0..len {
+            let _ = u32::decode(input)?; // DomainBlockNumber key
+            last_amount = u128::decode(input)?; // amount_to_unlock
+            last_refund = u128::decode(input)?; // storage_fee_refund
+        }
+
+        // withdrawal_in_shares: Option<WithdrawalInShares>
+        let variant = u8::decode(input)?;
+        if variant == 0 {
+            // Shares already epoch-converted; fall back to the last BTreeMap entry.
+            let _ = u128::decode(input)?; // top-level storage_fee_refund (cumulative, skip)
+            return Ok(Self {
+                shares: 0,
+                amount: last_amount,
+                storage_fee_refund: last_refund,
+            });
+        }
+        let _ = u32::decode(input)?; // domain_epoch.domain_id
+        let _ = u32::decode(input)?; // domain_epoch.epoch_index
+        let _ = u32::decode(input)?; // unlock_at_confirmed_domain_block_number
+        let shares = u128::decode(input)?;
+        let storage_fee_refund = u128::decode(input)?;
+        let _ = u128::decode(input)?; // top-level storage_fee_refund (cumulative, skip)
+        Ok(Self {
+            shares,
+            amount: 0,
+            storage_fee_refund,
+        })
+    }
+}
+
 /// On-chain SCALE layout (Autonomys mainnet):
 ///   signing_key:                [u8; 32]
 ///   current_domain_id:          u32
