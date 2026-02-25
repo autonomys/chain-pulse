@@ -300,7 +300,7 @@ async fn index_epoch_share_prices(
         {
             Ok(Some(price)) => price,
             Ok(None) => {
-                tracing::warn!(%operator_id, block_height, epoch_index, "no share price for this epoch (expected for newly registered operators)");
+                tracing::debug!(%operator_id, block_height, epoch_index, "no share price for this epoch (expected for newly registered operators)");
                 continue;
             }
             Err(err) => {
