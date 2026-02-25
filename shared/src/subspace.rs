@@ -134,6 +134,23 @@ impl BlockExt {
             .transpose()
     }
 
+    /// Returns `true` if the storage entry exists (without decoding the value).
+    pub async fn has_storage<Args: StorageKey>(
+        &self,
+        pallet: &str,
+        storage: &str,
+        arg_data: Args,
+    ) -> Result<bool, Error> {
+        let query = subxt::dynamic::storage(pallet, storage, arg_data);
+        Ok(self
+            .client
+            .storage()
+            .at(self.hash)
+            .fetch(&query)
+            .await?
+            .is_some())
+    }
+
     /// Iterates all entries in a storage map, returning `(raw_key_bytes, decoded_value)` pairs.
     ///
     /// For a map with `Identity` hasher the operator ID is the last 8 bytes of the key.

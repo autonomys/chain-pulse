@@ -174,6 +174,7 @@ pub(crate) struct OperatorRow {
     pub(crate) total_stake: String,
     pub(crate) total_shares: String,
     pub(crate) total_storage_fee_deposit: String,
+    pub(crate) nominator_count: i64,
 }
 
 #[derive(Clone)]
@@ -528,6 +529,21 @@ impl Db {
         .bind(block_height as i64)
         .execute(&*self.pool)
         .await?;
+
+        sqlx::query(
+            r#"
+            UPDATE indexer.operators
+            SET nominator_count = (
+                SELECT COUNT(*) FROM indexer.nominators
+                WHERE operator_id = $1 AND status = 'active'
+            )
+            WHERE operator_id = $1
+            "#,
+        )
+        .bind(operator_id as i64)
+        .execute(&*self.pool)
+        .await?;
+
         Ok(())
     }
 
@@ -713,7 +729,7 @@ impl Db {
             SELECT operator_id::text, domain_id::text, owner_account,
                    signing_key, minimum_nominator_stake::text, nomination_tax,
                    status, total_stake::text, total_shares::text,
-                   total_storage_fee_deposit::text
+                   total_storage_fee_deposit::text, nominator_count
             FROM indexer.operators
             ORDER BY operators.operator_id ASC
             "#,
@@ -732,7 +748,7 @@ impl Db {
             SELECT operator_id::text, domain_id::text, owner_account,
                    signing_key, minimum_nominator_stake::text, nomination_tax,
                    status, total_stake::text, total_shares::text,
-                   total_storage_fee_deposit::text
+                   total_storage_fee_deposit::text, nominator_count
             FROM indexer.operators
             WHERE operator_id = $1
             "#,

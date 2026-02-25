@@ -121,17 +121,6 @@ impl StaticEvent for OperatorNominated {
 }
 
 #[derive(Debug, Clone, DecodeAsType)]
-pub(crate) struct WithdrewStake {
-    pub(crate) operator_id: u64,
-    pub(crate) nominator_id: AccountId32,
-}
-
-impl StaticEvent for WithdrewStake {
-    const PALLET: &'static str = "Domains";
-    const EVENT: &'static str = "WithdrewStake";
-}
-
-#[derive(Debug, Clone, DecodeAsType)]
 pub(crate) struct NominatorUnlocked {
     pub(crate) operator_id: u64,
     pub(crate) nominator_id: AccountId32,
@@ -140,6 +129,19 @@ pub(crate) struct NominatorUnlocked {
 impl StaticEvent for NominatorUnlocked {
     const PALLET: &'static str = "Domains";
     const EVENT: &'static str = "NominatorUnlocked";
+}
+
+/// Emitted by `unlock_funds` when a withdrawal's locking period completes.
+/// The Deposit entry may be removed if shares and pending deposits are both zero.
+#[derive(Debug, Clone, DecodeAsType)]
+pub(crate) struct NominatedStakedUnlocked {
+    pub(crate) operator_id: u64,
+    pub(crate) nominator_id: AccountId32,
+}
+
+impl StaticEvent for NominatedStakedUnlocked {
+    const PALLET: &'static str = "Domains";
+    const EVENT: &'static str = "NominatedStakedUnlocked";
 }
 
 #[derive(Debug, Clone, DecodeAsType)]

@@ -1,7 +1,8 @@
 use crate::error::Error;
 use crate::events::{
-    DomainEpochCompleted, NominatorUnlocked, OperatorDeactivated, OperatorDeregistered,
-    OperatorNominated, OperatorReactivated, OperatorRegistered, OperatorSlashed, WithdrewStake,
+    DomainEpochCompleted, NominatedStakedUnlocked, NominatorUnlocked, OperatorDeactivated,
+    OperatorDeregistered, OperatorNominated, OperatorReactivated, OperatorRegistered,
+    OperatorSlashed,
 };
 use crate::processor::{self, BlockProcessor};
 use crate::rpc_types::FullOperator;
@@ -93,7 +94,7 @@ async fn index_staking_for_block(
         db.upsert_operator(UpsertOperator {
             operator_id: e.operator_id,
             domain_id: op.current_domain_id,
-            owner_account,
+            owner_account: owner_account.clone(),
             signing_key: signing_key_hex,
             minimum_nominator_stake: op.minimum_nominator_stake,
             nomination_tax: op.nomination_tax,
@@ -104,6 +105,11 @@ async fn index_staking_for_block(
             block_time,
         })
         .await?;
+
+        // The operator owner's initial stake may not emit OperatorNominated,
+        // so register the owner as an active nominator explicitly.
+        db.upsert_nominator(e.operator_id, &owner_account, "active", block_number)
+            .await?;
     }
 
     for event in events.find::<OperatorDeregistered>() {
@@ -136,17 +142,33 @@ async fn index_staking_for_block(
             .await?;
     }
 
-    for event in events.find::<WithdrewStake>() {
+    // NominatorUnlocked fires for deregistered operators via do_unlock_nominator
+    // which calls Deposits::take() — the nominator is unconditionally removed.
+    for event in events.find::<NominatorUnlocked>() {
         let e = event?;
         let address = sp_core::crypto::AccountId32::new(e.nominator_id.0).to_string();
         db.upsert_nominator(e.operator_id, &address, "withdrawn", block_number)
             .await?;
     }
 
-    for event in events.find::<NominatorUnlocked>() {
+    // NominatedStakedUnlocked fires for registered operators via do_unlock_funds.
+    // If the Deposits entry is gone the nominator is fully out.
+    for event in events.find::<NominatedStakedUnlocked>() {
         let e = event?;
         let address = sp_core::crypto::AccountId32::new(e.nominator_id.0).to_string();
-        db.upsert_nominator(e.operator_id, &address, "withdrawn", block_number)
+        let has_deposit = block_ext
+            .has_storage(
+                "Domains",
+                "Deposits",
+                (
+                    StaticStorageKey::new(e.operator_id),
+                    StaticStorageKey::new(e.nominator_id.clone()),
+                ),
+            )
+            .await
+            .unwrap_or(true);
+        let status = if has_deposit { "active" } else { "withdrawn" };
+        db.upsert_nominator(e.operator_id, &address, status, block_number)
             .await?;
     }
 
@@ -252,9 +274,7 @@ async fn index_epoch_share_prices(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::events::{
-        DomainEpochCompleted, OperatorNominated, OperatorRegistered, WithdrewStake,
-    };
+    use crate::events::{DomainEpochCompleted, OperatorNominated, OperatorRegistered};
     use crate::rpc_types::FullOperator;
     use crate::test_utils::{get_db, sample_operator};
     use shared::subspace::Subspace;
@@ -269,8 +289,6 @@ mod tests {
         "0x9749ce3959c6e613a85f1576331ebb138aa3f00492dcde3b37ae978bb399c364";
     const DOMAIN_EPOCH_COMPLETED_HASH: &str =
         "0xb26dc651dd8317b593775da3202061dd0c1dea817e0e60c5f0f4b14c6f9efb39";
-    const WITHDREW_STAKE_HASH: &str =
-        "0xe70e7da10ae1fa68f5e274e6f673ae6933386e688284186dec88fc2870f38e24";
     const OPERATOR_NOMINATED_HASH: &str =
         "0x5df7664c6e14422fdbbc68f5d78f4252e2151bce887b9659e4eea53df59e3f74";
 
@@ -334,29 +352,6 @@ mod tests {
         assert!(!nominated.is_empty(), "should find OperatorNominated event");
         let e = &nominated[0];
         assert!(e.operator_id > 0, "operator_id should be > 0");
-        assert_ne!(
-            e.nominator_id.0, [0u8; 32],
-            "nominator_id should not be all zeros"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_decode_withdrew_stake() {
-        let subspace = Subspace::new_from_url(RPC_URL)
-            .await
-            .unwrap()
-            .block_provider();
-
-        let block_hash = H256::from_str(WITHDREW_STAKE_HASH).unwrap();
-        let block_ext = subspace.block_ext_at_hash(block_hash).await.unwrap();
-        let events = block_ext.events().await.unwrap();
-
-        let withdrew: Vec<_> = events
-            .find::<WithdrewStake>()
-            .filter_map(|e| e.ok())
-            .collect();
-        assert!(!withdrew.is_empty(), "should find WithdrewStake event");
-        let e = &withdrew[0];
         assert_ne!(
             e.nominator_id.0, [0u8; 32],
             "nominator_id should not be all zeros"
@@ -468,70 +463,6 @@ mod tests {
         assert!(
             count > 0,
             "at least one active nominator should exist after OperatorNominated"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_index_staking_withdrew_stake() {
-        let test_db = get_db().await;
-        let subspace = Subspace::new_from_url(RPC_URL)
-            .await
-            .unwrap()
-            .block_provider();
-
-        // Decode the event to learn operator_id and nominator address
-        let block_hash = H256::from_str(WITHDREW_STAKE_HASH).unwrap();
-        let block_ext = subspace.block_ext_at_hash(block_hash).await.unwrap();
-        let block_number = block_ext.number;
-        let events = block_ext.events().await.unwrap();
-        let withdrew: Vec<_> = events
-            .find::<WithdrewStake>()
-            .filter_map(|e| e.ok())
-            .collect();
-        assert!(!withdrew.is_empty());
-        let operator_id = withdrew[0].operator_id;
-        let nominator_address =
-            sp_core::crypto::AccountId32::new(withdrew[0].nominator_id.0).to_string();
-
-        // Pre-insert operator
-        test_db
-            .db
-            .upsert_operator(sample_operator(operator_id))
-            .await
-            .unwrap();
-
-        // Pre-insert nominator as "active" at an earlier block
-        test_db
-            .db
-            .upsert_nominator(operator_id, &nominator_address, "active", 1)
-            .await
-            .unwrap();
-        let count = test_db
-            .db
-            .get_active_nominator_count(operator_id as i64)
-            .await
-            .unwrap();
-        assert!(count > 0, "nominator should be active before withdrawal");
-
-        // Run the indexer for the WithdrewStake block
-        index_staking_for_block(block_number, &test_db.db, &subspace)
-            .await
-            .unwrap();
-
-        // Verify the specific nominator's status changed to withdrawn.
-        // (The block may also contain OperatorNominated events that add other
-        // active nominators for the same operator, so we query this nominator directly.)
-        let status: (String,) = sqlx::query_as(
-            "SELECT status FROM indexer.nominators WHERE operator_id = $1 AND address = $2",
-        )
-        .bind(operator_id as i64)
-        .bind(&nominator_address)
-        .fetch_one(&*test_db.db.pool)
-        .await
-        .unwrap();
-        assert_eq!(
-            status.0, "withdrawn",
-            "nominator should be withdrawn after WithdrewStake event"
         );
     }
 
