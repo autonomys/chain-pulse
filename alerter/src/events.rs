@@ -158,9 +158,7 @@ async fn check_low_balances(
             name,
             address,
             threshold,
-        } = balance_alerts
-            .get(&account_id)
-            .expect("checked above; qed");
+        } = balance_alerts.get(&account_id).expect("checked above; qed");
 
         let key = StaticStorageKey::new(account_id.clone());
         match block
