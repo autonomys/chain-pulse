@@ -9,12 +9,10 @@ use crate::event_types::{
 use crate::slack::{Alert, AlertSink};
 use crate::{Account, BalanceAlert};
 use log::{debug, error, info, warn};
-use parity_scale_codec::Decode;
 use shared::subspace::{AccountId, Balance, BlockExt, BlocksStream};
 use std::collections::{BTreeMap, BTreeSet};
 use std::str::FromStr;
 use subxt::events::Events;
-use subxt::storage::StaticStorageKey;
 use subxt_core::config::SubstrateConfig;
 use subxt_core::events::StaticEvent;
 
@@ -22,25 +20,6 @@ struct ResolvedBalanceAlert {
     name: String,
     address: String,
     threshold: Balance,
-}
-
-/// Minimal decode target for `System.Account` storage.
-/// Layout matches `frame_system::AccountInfo<u32, pallet_balances::AccountData<u128>>`.
-#[derive(Decode)]
-struct StorageAccountData {
-    free: Balance,
-    _reserved: Balance,
-    _frozen: Balance,
-    _flags: u128,
-}
-
-#[derive(Decode)]
-struct StorageAccountInfo {
-    _nonce: u32,
-    _consumers: u32,
-    _providers: u32,
-    _sufficients: u32,
-    data: StorageAccountData,
 }
 
 pub(crate) async fn watch_events(
@@ -160,17 +139,13 @@ async fn check_low_balances(
             threshold,
         } = balance_alerts.get(&account_id).expect("checked above; qed");
 
-        let key = StaticStorageKey::new(account_id.clone());
-        match block
-            .try_read_storage::<_, StorageAccountInfo>("System", "Account", key)
-            .await
-        {
-            Ok(Some(info)) => {
-                if info.data.free < *threshold {
+        match block.free_balance(&account_id).await {
+            Ok(Some(free)) => {
+                if free < *threshold {
                     alerts.push(LowBalanceEvent {
                         name: name.clone(),
                         address: address.clone(),
-                        balance: info.data.free,
+                        balance: free,
                         threshold: *threshold,
                     });
                 }
