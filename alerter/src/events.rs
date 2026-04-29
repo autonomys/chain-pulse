@@ -176,16 +176,10 @@ async fn check_low_balances(
                 }
             }
             Ok(None) => {
-                warn!(
-                    "System.Account storage missing for {} — balance check skipped",
-                    address
-                );
+                warn!("System.Account storage missing for {address} — balance check skipped");
             }
             Err(err) => {
-                warn!(
-                    "Failed to read balance for {} in block {}: {err}",
-                    address, block.number
-                );
+                warn!("Failed to read balance for {address} in block {}: {err}", block.number);
             }
         }
     }
