@@ -11,6 +11,7 @@ use subxt_core::utils::Static;
 #[derive(Debug)]
 pub(crate) enum Event {
     Transfer(TransferKnownAccountEvent),
+    LowBalance(LowBalanceEvent),
     DomainRuntimeUpgraded(DomainRuntimeUpgraded),
     DomainInstantiated(DomainInstantiated),
     FraudProofProcessed(FraudProofProcessed),
@@ -281,6 +282,20 @@ pub(crate) struct TransferKnownAccountEvent {
 impl From<TransferKnownAccountEvent> for Event {
     fn from(value: TransferKnownAccountEvent) -> Self {
         Self::Transfer(value)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct LowBalanceEvent {
+    pub(crate) name: String,
+    pub(crate) address: String,
+    pub(crate) balance: Balance,
+    pub(crate) threshold: Balance,
+}
+
+impl From<LowBalanceEvent> for Event {
+    fn from(value: LowBalanceEvent) -> Self {
+        Self::LowBalance(value)
     }
 }
 
