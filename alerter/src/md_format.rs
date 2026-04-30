@@ -1,6 +1,6 @@
 //! Markdown format
 
-use crate::event_types::{Event, TransferKnownAccountEvent};
+use crate::event_types::{Event, LowBalanceEvent, TransferKnownAccountEvent};
 use crate::slack::Alert;
 use crate::slots::{AvgSlowSlot, SlowSlot, TimekeeperRecovery, TimekeeperStall};
 use crate::stall_and_reorg::{ChainRecovery, ChainReorg, ChainStall};
@@ -40,6 +40,7 @@ impl MdFormat {
     fn format_event(&self, event: Event) -> String {
         match event {
             Event::Transfer(transfer) => self.format_transfer(transfer),
+            Event::LowBalance(e) => self.format_low_balance(e),
             Event::DomainRuntimeUpgraded(e) => {
                 format!("**Domain runtime upgraded**\nRuntime ID: {}", e.runtime_id)
             }
@@ -82,6 +83,20 @@ impl MdFormat {
             Event::Sudo => "**Sudo event triggered**".to_string(),
             Event::CodeUpdated(_) => "**Runtime code updated**".to_string(),
         }
+    }
+
+    fn format_low_balance(&self, low_balance: LowBalanceEvent) -> String {
+        let LowBalanceEvent {
+            name,
+            address,
+            balance,
+            threshold,
+        } = low_balance;
+        format!(
+            "**Low balance warning**\nAccount: {name} [{address}]\nBalance: {}\nThreshold: {}",
+            self.format_balance(balance),
+            self.format_balance(threshold),
+        )
     }
 
     fn format_transfer(&self, transfer: TransferKnownAccountEvent) -> String {

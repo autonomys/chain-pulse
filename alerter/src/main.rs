@@ -57,9 +57,20 @@ pub(crate) struct Account {
     pub(crate) address: String,
 }
 
+/// An account whose free balance is checked after every withdrawal, with a
+/// Slack alert fired if it drops below `threshold_ai3` whole tokens.
+#[derive(Debug, Deserialize, Clone)]
+pub(crate) struct BalanceAlert {
+    pub(crate) name: String,
+    pub(crate) address: String,
+    pub(crate) threshold_ai3: u64,
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub(crate) struct NetworkConfig {
     pub(crate) accounts: Vec<Account>,
+    #[serde(default)]
+    pub(crate) account_balance_alerts: Vec<BalanceAlert>,
     pub(crate) bootnodes: Vec<Multiaddr>,
 }
 
@@ -117,11 +128,21 @@ async fn main() -> Result<(), Error> {
         }
     });
 
-    // monitor ai3 transfers
+    // monitor ai3 transfers and account balances
     join_set.spawn({
         let stream = subspace.blocks_stream();
         let alert_sink = slack.sink();
-        async move { events::watch_events(stream, alert_sink, network_config.accounts).await }
+        let token_decimals = network_details.token_decimals;
+        async move {
+            events::watch_events(
+                stream,
+                alert_sink,
+                network_config.accounts,
+                network_config.account_balance_alerts,
+                token_decimals,
+            )
+            .await
+        }
     });
 
     // monitor slots

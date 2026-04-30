@@ -6,7 +6,7 @@ use futures_util::{StreamExt, TryStreamExt, stream};
 use log::{debug, error, info, warn};
 use sp_blockchain::{CachedHeaderMetadata, TreeRoute};
 use sp_runtime::app_crypto::sp_core::crypto::Ss58AddressFormat;
-use sp_runtime::codec::{Decode, Encode};
+use sp_runtime::codec::{Decode, Encode, Input};
 use sp_runtime::traits::{BlakeTwo256, Block as BlockT, Header as HeaderT};
 use sp_runtime::{OpaqueExtrinsic, generic};
 use std::collections::{BTreeMap, BTreeSet};
@@ -15,6 +15,7 @@ use subxt::backend::BackendExt;
 use subxt::client::ClientRuntimeUpdater;
 use subxt::config::substrate::SubstrateHeader;
 use subxt::events::{EventDetails, Events};
+use subxt::storage::StaticStorageKey;
 use subxt::{OnlineClient, SubstrateConfig};
 use subxt_core::Config;
 use subxt_core::storage::address::StorageKey;
@@ -41,6 +42,8 @@ type SubxtBlockStream =
 pub type Slot = u64;
 /// Subspace timestamp type.
 pub type Timestamp = u64;
+/// Account nonce type.
+pub type Nonce = u32;
 
 /// Block provider for subspace
 #[derive(Clone)]
@@ -90,6 +93,37 @@ impl SubspaceBlockProvider {
             extrinsics_root,
             client: self.client.clone(),
         })
+    }
+}
+
+/// Layout of `pallet_balances::AccountData<u128>` within `System.Account`.
+struct StorageAccountData {
+    free: Balance,
+}
+
+impl Decode for StorageAccountData {
+    fn decode<I: Input>(input: &mut I) -> Result<Self, sp_runtime::codec::Error> {
+        let free = Balance::decode(input)?;
+        let _reserved = Balance::decode(input)?;
+        let _frozen = Balance::decode(input)?;
+        let _flags = u128::decode(input)?;
+        Ok(Self { free })
+    }
+}
+
+/// Layout of `frame_system::AccountInfo<u32, pallet_balances::AccountData<u128>>`.
+struct StorageAccountInfo {
+    data: StorageAccountData,
+}
+
+impl Decode for StorageAccountInfo {
+    fn decode<I: Input>(input: &mut I) -> Result<Self, sp_runtime::codec::Error> {
+        let _nonce = Nonce::decode(input)?;
+        let _consumers = u32::decode(input)?;
+        let _providers = u32::decode(input)?;
+        let _sufficients = u32::decode(input)?;
+        let data = StorageAccountData::decode(input)?;
+        Ok(Self { data })
     }
 }
 
@@ -205,6 +239,15 @@ impl BlockExt {
             .map(|ext| Ext::decode(&mut &ext[..]))
             .try_collect::<Vec<_>>()?;
         Ok(exts)
+    }
+
+    /// Returns the free balance of an account at this block, or `None` if the account does not exist.
+    pub async fn free_balance(&self, account: &AccountId) -> Result<Option<Balance>, Error> {
+        let key = StaticStorageKey::new(account.clone());
+        let info = self
+            .try_read_storage::<_, StorageAccountInfo>("System", "Account", key)
+            .await?;
+        Ok(info.map(|i| i.data.free))
     }
 
     /// Returns block events

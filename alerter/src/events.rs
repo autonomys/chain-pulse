@@ -1,53 +1,68 @@
 //! Module to monitor AI3 transfers and other events
 
-use crate::Account;
 use crate::error::Error;
 use crate::event_types::{
     BalanceDeposit, BalanceTransfer, BalanceWithdraw, CodeUpdated, DomainInstantiated,
-    DomainRuntimeUpgraded, Event, FraudProofProcessed, OperatorOffline, OperatorSlashed, Sudo,
-    TransferDirection, TransferEvent, TransferKnownAccountEvent,
+    DomainRuntimeUpgraded, Event, FraudProofProcessed, LowBalanceEvent, OperatorOffline,
+    OperatorSlashed, Sudo, TransferDirection, TransferEvent, TransferKnownAccountEvent,
 };
 use crate::slack::{Alert, AlertSink};
-use log::{debug, error, info};
-use shared::subspace::{AccountId, BlocksStream};
-use std::collections::BTreeMap;
+use crate::{Account, BalanceAlert};
+use log::{debug, error, info, warn};
+use shared::subspace::{AccountId, Balance, BlockExt, BlocksStream};
+use std::collections::{BTreeMap, BTreeSet};
 use std::str::FromStr;
 use subxt::events::Events;
 use subxt_core::config::SubstrateConfig;
 use subxt_core::events::StaticEvent;
 
+struct ResolvedBalanceAlert {
+    name: String,
+    address: String,
+    threshold: Balance,
+}
+
 pub(crate) async fn watch_events(
     mut stream: BlocksStream,
     alert_sink: AlertSink,
     accounts: Vec<Account>,
+    balance_alerts: Vec<BalanceAlert>,
+    token_decimals: u8,
 ) -> Result<(), Error> {
     info!("Watching block events...");
-    let accounts = account_mapped_name(accounts);
+    let transfer_account_map = account_mapped_name(accounts);
+    let balance_alert_map = build_balance_alert_map(balance_alerts, token_decimals);
     loop {
         let blocks_ext = stream.recv().await?;
         for block in blocks_ext.blocks {
             let block_events = block.events().await?;
             let mut events: Vec<Event> = vec![];
+
             let mut transfers = filter_known_account_transfers(
                 block_events
                     .find::<BalanceTransfer>()
                     .try_collect::<Vec<_>>()?,
-                &accounts,
+                &transfer_account_map,
             );
             transfers.extend(filter_known_account_transfers(
                 block_events
                     .find::<BalanceDeposit>()
                     .try_collect::<Vec<_>>()?,
-                &accounts,
+                &transfer_account_map,
             ));
+
+            let withdrawals = block_events
+                .find::<BalanceWithdraw>()
+                .try_collect::<Vec<_>>()?;
+            let low_balance_events =
+                check_low_balances(&block, &withdrawals, &balance_alert_map).await;
             transfers.extend(filter_known_account_transfers(
-                block_events
-                    .find::<BalanceWithdraw>()
-                    .try_collect::<Vec<_>>()?,
-                &accounts,
+                withdrawals,
+                &transfer_account_map,
             ));
 
             events.extend(transfers.into_iter().map(Into::into).collect::<Vec<_>>());
+            events.extend(low_balance_events.into_iter().map(Into::into));
             events.extend(as_events::<DomainRuntimeUpgraded>(&block_events)?);
             events.extend(as_events::<DomainInstantiated>(&block_events)?);
             events.extend(as_events::<FraudProofProcessed>(&block_events)?);
@@ -68,6 +83,86 @@ pub(crate) async fn watch_events(
             })
         }
     }
+}
+
+/// Builds a lookup map for balance-alert accounts with thresholds converted to
+/// Shannons using the network's token decimals.
+fn build_balance_alert_map(
+    alerts: Vec<BalanceAlert>,
+    token_decimals: u8,
+) -> BTreeMap<AccountId, ResolvedBalanceAlert> {
+    let scale = 10u128.pow(token_decimals as u32);
+    alerts
+        .into_iter()
+        .map(|alert| {
+            let account_id =
+                AccountId::from_str(&alert.address).expect("Must be a valid SS58 address");
+            let threshold = alert.threshold_ai3 as Balance * scale;
+            (
+                account_id,
+                ResolvedBalanceAlert {
+                    name: alert.name,
+                    address: alert.address,
+                    threshold,
+                },
+            )
+        })
+        .collect()
+}
+
+/// For each `account_balance_alerts` account that submitted an extrinsic in this block
+/// (detected via `Balances::Withdraw` fee deduction), queries its free balance and
+/// emits a `LowBalanceEvent` if it has dropped below the configured threshold.
+/// No RPC call is made on blocks where the account has no activity.
+async fn check_low_balances(
+    block: &BlockExt,
+    withdrawals: &[BalanceWithdraw],
+    balance_alerts: &BTreeMap<AccountId, ResolvedBalanceAlert>,
+) -> Vec<LowBalanceEvent> {
+    let mut alerts = vec![];
+    let mut checked: BTreeSet<AccountId> = BTreeSet::new();
+
+    for withdrawal in withdrawals {
+        let Some(account_id) = withdrawal.from() else {
+            continue;
+        };
+        if !balance_alerts.contains_key(&account_id) {
+            continue;
+        }
+        if !checked.insert(account_id.clone()) {
+            continue;
+        }
+
+        let ResolvedBalanceAlert {
+            name,
+            address,
+            threshold,
+        } = balance_alerts.get(&account_id).expect("checked above; qed");
+
+        match block.free_balance(&account_id).await {
+            Ok(Some(free)) => {
+                if free < *threshold {
+                    alerts.push(LowBalanceEvent {
+                        name: name.clone(),
+                        address: address.clone(),
+                        balance: free,
+                        threshold: *threshold,
+                    });
+                }
+            }
+            Ok(None) => {
+                warn!("System.Account storage missing for {address} — balance check skipped");
+            }
+            Err(err) => {
+                warn!(
+                    "Failed to read balance for {address} in block {}: {err}",
+                    block.number
+                );
+            }
+        }
+    }
+
+    alerts
 }
 
 fn as_events<E: StaticEvent + Into<Event>>(
