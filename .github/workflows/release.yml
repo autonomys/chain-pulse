@@ -1,0 +1,65 @@
+# Release pipeline. Fires on a tag push of the form vX.Y.Z, asserts the tag
+# matches [workspace.package].version in the root Cargo.toml, builds and
+# publishes Docker images for both services to ghcr.io (via the reusable
+# _build-image.yml workflow), and creates a draft GitHub release with
+# auto-generated notes for human review and publish.
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_TERM_COLOR: always
+
+jobs:
+  verify-version:
+    name: verify-version
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      - name: Assert tag matches [workspace.package].version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          expected="v$(awk -F\" '/^\[workspace\.package\]/{w=1} w && /^version[[:space:]]*=/{print $2; exit}' Cargo.toml)"
+          if [[ "$TAG" != "$expected" ]]; then
+            echo "::error::tag $TAG does not match Cargo workspace version $expected" >&2
+            exit 1
+          fi
+          echo "tag $TAG matches Cargo workspace version"
+
+  build-images:
+    needs: verify-version
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [alerter, indexer]
+    uses: ./.github/workflows/_build-image.yml
+    with:
+      service: ${{ matrix.service }}
+    permissions:
+      packages: write
+
+  create-release:
+    name: create-release
+    needs: build-images
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+        with:
+          fetch-depth: 0
+
+      - name: Create draft release with auto-generated notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release create "$TAG" --draft --generate-notes
