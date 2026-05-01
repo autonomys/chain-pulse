@@ -1,6 +1,6 @@
 [package]
 name = "alerter"
-version = "1.1.1"
+version.workspace = true
 edition.workspace = true
 authors.workspace = true
 homepage.workspace = true
