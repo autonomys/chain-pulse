@@ -11,6 +11,7 @@ use sp_runtime::traits::{BlakeTwo256, Block as BlockT, Header as HeaderT};
 use sp_runtime::{OpaqueExtrinsic, generic};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
+use std::time::Duration;
 use subxt::backend::BackendExt;
 use subxt::client::ClientRuntimeUpdater;
 use subxt::config::substrate::SubstrateHeader;
@@ -299,6 +300,17 @@ pub struct BlocksExt {
 /// Maximum number of headers to load in the cache.
 const CACHE_HEADER_DEPTH: u32 = 100;
 
+/// Bound on the initial RPC connect inside `Subspace::new_from_url`. Prevents
+/// the binary from zombieing at startup if the upstream substrate RPC is
+/// unreachable: subxt's `ReconnectingRpcClient` retries the *initial* connect
+/// with an unbounded `ExponentialBackoff`, so without this guard the future
+/// never resolves and docker's `restart: unless-stopped` never fires. After
+/// the timeout, `new_from_url` returns `Err(Error::ConnectTimeout)`, `main()`
+/// exits non-zero, and the container restart loop takes over until the RPC
+/// is reachable. 60s is long enough to absorb a slow handshake and short
+/// enough to recycle within the first Uptime Kuma alert window.
+const STARTUP_CONNECT_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// Overarching Subspace network wrapper
 /// for listening blocks, read storages etc..
 pub struct Subspace {
@@ -319,6 +331,12 @@ pub struct NetworkDetails {
 
 impl Subspace {
     pub async fn new_from_url(url: &str) -> Result<Self, Error> {
+        tokio::time::timeout(STARTUP_CONNECT_TIMEOUT, Self::connect(url))
+            .await
+            .map_err(|_| Error::ConnectTimeout)?
+    }
+
+    async fn connect(url: &str) -> Result<Self, Error> {
         let rpc_client = RpcClient::new(
             subxt_rpcs::client::ReconnectingRpcClient::builder()
                 .build(url)

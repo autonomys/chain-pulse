@@ -10,6 +10,8 @@ pub enum Error {
     SubscriptionClosed,
     #[error("RPC error: {0}")]
     Rpc(#[from] subxt_rpcs::Error),
+    #[error("Timed out establishing initial RPC connection")]
+    ConnectTimeout,
     #[error("Block Hash missing from Cache")]
     MissingBlockHashFromCache(H256),
     #[error("Block body missing: {0}")]

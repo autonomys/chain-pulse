@@ -1,5 +1,5 @@
 [workspace.package]
-version = "1.2.0"
+version = "1.2.1"
 edition = "2024"
 authors = ["Subspace Labs <https://subspace.network>"]
 homepage = "https://subspace.network"
