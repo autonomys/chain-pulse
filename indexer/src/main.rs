@@ -143,11 +143,8 @@ async fn start_tasks(
     let subspace = Subspace::new_from_url(rpc).await?;
     let network_details = subspace.network_details().await?;
     set_default_ss58_version(network_details.ss58_format);
-    let updater = subspace.runtime_metadata_updater();
-    join_set.spawn(
-        async move { updater.perform_runtime_updates().await.map_err(Into::into) }
-            .instrument(span.clone()),
-    );
+    let metadata_task = subspace.stable_metadata_update_task();
+    join_set.spawn(async move { metadata_task.await.map_err(Into::into) }.instrument(span.clone()));
 
     let is_consensus = matches!(chain, ChainId::Consensus);
     let block_provider = subspace.block_provider();

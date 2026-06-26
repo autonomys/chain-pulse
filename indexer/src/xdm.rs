@@ -100,8 +100,7 @@ pub(crate) async fn extract_xdm_events_for_block(
             .events()
             .await?
             .iter()
-            .filter_map(|event| event.ok())
-            .collect::<Vec<_>>(),
+            .collect::<Result<Vec<_>, _>>()?,
         ChainId::Domain(DomainId(0)) => block_ext.events_from_segments().await?,
         _ => return Err(Error::Config(format!("invalid chain id: {chain:?}"))),
     };

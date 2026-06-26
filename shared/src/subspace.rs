@@ -13,7 +13,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 use subxt::backend::BackendExt;
-use subxt::client::ClientRuntimeUpdater;
 use subxt::config::substrate::SubstrateHeader;
 use subxt::events::{EventDetails, Events};
 use subxt::storage::StaticStorageKey;
@@ -272,8 +271,7 @@ impl BlockExt {
                 let events =
                     Events::<SubstrateConfig>::decode_from(event_data, self.client.metadata())
                         .iter()
-                        .filter_map(|event| event.ok())
-                        .collect::<Vec<_>>();
+                        .collect::<Result<Vec<_>, _>>()?;
                 total_events.extend(events);
             }
         }
@@ -329,6 +327,21 @@ pub struct NetworkDetails {
     pub genesis_hash: BlockHash,
 }
 
+/// Fetches the chain's stable V14 metadata via the legacy `state_getMetadata`
+/// RPC. subxt's own metadata fetch prefers the node's unstable metadata
+/// (V16/V15); on this runtime that metadata mis-sizes some events, so subxt
+/// overruns the SCALE buffer while iterating a block's events. V14 decodes
+/// correctly, so it is pinned on the client.
+async fn fetch_stable_metadata(rpc: &SubspaceRpcClient) -> Result<subxt::Metadata, Error> {
+    let prefixed = rpc
+        .state_get_metadata(None)
+        .await?
+        .to_frame_metadata()
+        .map_err(|e| Error::Config(format!("decode stable metadata: {e}")))?;
+    subxt::Metadata::try_from(prefixed)
+        .map_err(|e| Error::Config(format!("convert stable metadata: {e}")))
+}
+
 impl Subspace {
     pub async fn new_from_url(url: &str) -> Result<Self, Error> {
         tokio::time::timeout(STARTUP_CONNECT_TIMEOUT, Self::connect(url))
@@ -345,6 +358,8 @@ impl Subspace {
         );
         let rpc = Arc::new(LegacyRpcMethods::<SubstrateConfig>::new(rpc_client.clone()));
         let client = Arc::new(SubspaceClient::from_rpc_client(rpc_client).await?);
+        // Override subxt's default (unstable) metadata with stable V14.
+        client.set_metadata(fetch_stable_metadata(&rpc).await?);
         let (sink, stream) = channel(100);
         Ok(Self {
             rpc,
@@ -354,8 +369,24 @@ impl Subspace {
         })
     }
 
-    pub fn runtime_metadata_updater(&self) -> ClientRuntimeUpdater<SubstrateConfig> {
-        self.client.updater()
+    /// Keeps the client metadata current across runtime upgrades, always pinning
+    /// the stable V14 metadata. subxt's built-in `perform_runtime_updates`
+    /// re-fetches the node's unstable metadata on each upgrade, which would
+    /// re-introduce the event-decode bug; fetching V14 instead lets a live
+    /// upgrade (e.g. mainnet reaching this runtime) transition without a redeploy.
+    pub fn stable_metadata_update_task(
+        &self,
+    ) -> impl std::future::Future<Output = Result<(), Error>> + 'static {
+        let rpc = self.rpc.clone();
+        let client = self.client.clone();
+        async move {
+            let mut updates = client.updater().runtime_updates().await?;
+            while let Some(update) = updates.next().await {
+                update?;
+                client.set_metadata(fetch_stable_metadata(&rpc).await?);
+            }
+            Ok(())
+        }
     }
 
     pub fn blocks_stream(&self) -> BlocksStream {

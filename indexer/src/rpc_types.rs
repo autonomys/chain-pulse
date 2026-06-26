@@ -326,4 +326,34 @@ mod tests {
             "signing_key should not be all zeros"
         );
     }
+
+    /// Regression for the chronos spec-10 metadata bug: subxt fetches the node's
+    /// unstable metadata (V16/V15), which mis-sized an event and overran the SCALE
+    /// buffer ("Not enough data to fill buffer") partway through event iteration,
+    /// crash-looping the staking task. `Subspace` now pins stable V14 metadata, so
+    /// every event in a spec-10 block iterates cleanly.
+    #[tokio::test]
+    async fn test_chronos_spec10_block_events_decode() {
+        const CHRONOS: &str = "wss://rpc.chronos.autonomys.xyz/ws";
+        // First spec-10 block after the runtime upgrade; before the fix this
+        // failed after 41 of 99 events.
+        const UPGRADE_BLOCK: u32 = 3_042_062;
+
+        let subspace = Subspace::new_from_url(CHRONOS)
+            .await
+            .unwrap()
+            .block_provider();
+        let block_ext = subspace.block_ext_at_number(UPGRADE_BLOCK).await.unwrap();
+
+        let events = block_ext.events().await.unwrap();
+        let decoded = events
+            .iter()
+            .collect::<Result<Vec<_>, _>>()
+            .expect("every event in a spec-10 block must decode with pinned V14 metadata");
+        assert!(
+            decoded.len() > 50,
+            "expected a full block of events, got {}",
+            decoded.len()
+        );
+    }
 }
