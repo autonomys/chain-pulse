@@ -106,8 +106,8 @@ async fn main() -> Result<(), Error> {
 
     let mut network = Network::new(network_config.bootnodes, network_details.genesis_hash).await?;
     let mut join_set = JoinSet::default();
-    let updater = subspace.runtime_metadata_updater();
-    join_set.spawn(async move { updater.perform_runtime_updates().await.map_err(Into::into) });
+    let metadata_task = subspace.stable_metadata_update_task();
+    join_set.spawn(async move { metadata_task.await.map_err(Into::into) });
 
     let mut slack = SlackAlerter::new(cli.slack).await?;
 
