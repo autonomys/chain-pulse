@@ -506,25 +506,27 @@ impl Subspace {
                 }
                 Err(err) => Err(err),
             };
-            error!("Block subscription closed: {res:?}");
             // if disconnected or subscription ended, reinitiate for reconnection
             match &res {
                 Err(Error::Subxt(_)) | Err(Error::Rpc(_)) => {
-                    warn!("RPC connection disconnected. Reinitiating...");
+                    warn!("RPC connection disconnected, reinitiating: {res:?}");
                     continue;
                 }
                 Err(Error::SubscriptionClosed) => {
-                    warn!("Block subscription closed. Reinitiating...");
+                    warn!("Block subscription closed, reinitiating: {res:?}");
                     continue;
                 }
                 // we reconnect if there was a missing block.
                 // could be due to client has not indexed the details yet.
                 Err(Error::MissingBlockHeaderForNumber(_))
                 | Err(Error::MissingBlockHeaderForHash(_)) => {
-                    warn!("Missing block data. Reinitiating...");
+                    warn!("Missing block data, reinitiating: {res:?}");
                     continue;
                 }
-                _ => return res,
+                _ => {
+                    error!("Block subscription closed unexpectedly: {res:?}");
+                    return res;
+                }
             }
         }
     }
