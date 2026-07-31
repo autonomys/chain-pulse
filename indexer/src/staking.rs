@@ -452,10 +452,10 @@ mod tests {
         let block_ext = subspace.block_ext_at_hash(block_hash).await.unwrap();
         let events = block_ext.events().await.unwrap();
 
-        let completed: Vec<_> = events
+        let completed = events
             .find::<DomainEpochCompleted>()
-            .filter_map(|e| e.ok())
-            .collect();
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
         assert!(
             !completed.is_empty(),
             "should find DomainEpochCompleted event"
@@ -563,10 +563,10 @@ mod tests {
 
         // Decode the event to learn the domain_id
         let events = block_ext.events().await.unwrap();
-        let completed: Vec<_> = events
+        let completed = events
             .find::<DomainEpochCompleted>()
-            .filter_map(|e| e.ok())
-            .collect();
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
         assert!(!completed.is_empty());
         let domain_id = completed[0].domain_id.clone();
 
