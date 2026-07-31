@@ -15,6 +15,15 @@ impl Address for EventSegmentSize {
     }
 }
 
+pub(crate) fn system_events_key() -> Vec<u8> {
+    let a = sp_crypto_hashing::twox_128(b"System");
+    let b = sp_crypto_hashing::twox_128(b"Events");
+    let mut key = vec![];
+    key.extend_from_slice(&a);
+    key.extend_from_slice(&b);
+    key
+}
+
 pub(crate) fn system_event_segment_key(segment: u32) -> Vec<u8> {
     let a = sp_crypto_hashing::twox_128(b"System");
     let b = sp_crypto_hashing::twox_128(b"EventSegments");
